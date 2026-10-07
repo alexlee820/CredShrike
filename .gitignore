@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.venv/
+venv/
+
+# Operational artifacts — never commit run evidence or tickets
+runs/
+*.ccache
+*.kirbi
+*.keytab
+
+# Local configuration with real credentials (policy.example.yaml is committed;
+# your actual lab policy is not)
+policy.yaml
+lab.yaml
+*.local.yaml
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store

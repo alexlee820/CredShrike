@@ -1,0 +1,51 @@
+# smbenum agent policy — every cap the executor enforces.
+# Copy to lab.yaml and adapt; the `profiles` section feeds `--profile`.
+
+# ---------------------------------------------------------------- profiles
+# pick with: smbenum agent --profile lab.yaml
+profiles:
+  corp-ntlm:
+    auth_type: ntlm
+    username: svc-scan
+    domain: corp.local
+    hashes: ":31d6cfe0d16ae931b73c59d7e0c089c0"
+    kdc: dc01.corp.local          # optional KDC override for Kerberos paths
+    targets: [filesrv01.corp.local]
+    domain_source: ldap           # ldap | adws | auto
+
+  corp-ticket:
+    auth_type: ticket
+    username: ignored-from-ticket
+    domain: CORP.LOCAL
+    ticket: /path/to/ticket.ccache   # or .kirbi (converted in memory)
+
+  corp-aes:
+    auth_type: aes
+    username: svc-scan
+    domain: CORP.LOCAL
+    aes_key: <32-byte-hex aes256-cts-hmac-sha1-96>
+
+  corp-password:
+    auth_type: password
+    username: jdoe
+    domain: corp.local
+    password: "ChangeMe!"
+
+# ------------------------------------------------------------------- policy
+policy:
+  # per-tool caps (executor clamps whatever the LLM asks for)
+  max_file_bytes: 262144        # 256 KiB per smb_read_file
+  max_entries: 500              # per smb_list_dir
+  result_char_cap: 8192         # per tool_result fed back to the model
+
+  # per-run budgets (exhaustion -> model is asked to summarize and stop)
+  max_tool_calls: 100
+  max_total_read_bytes: 10485760  # 10 MiB
+  wall_clock_seconds: 1800
+
+  # session scope: empty = unrestricted (CLI may also pass --host)
+  allowed_hosts: []
+
+  # LLM
+  model: claude-opus-5           # env SMBENUM_MODEL overrides
+  max_tokens: 16000

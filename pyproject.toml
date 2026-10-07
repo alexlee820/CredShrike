@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smbenum"
+version = "0.1.0"
+description = "Multi-auth SMB enumeration toolkit with LDAP/ADWS domain queries and a capability-limited LLM agent"
+requires-python = ">=3.10"
+dependencies = [
+    "impacket>=0.10.0",
+    "ldap3>=2.9",
+    "pycryptodomex>=3.19",   # vendored ADWS NegotiateStream (ARC4/HMAC sealing)
+    "PyYAML>=6.0",
+    "dnspython>=2.4",
+    "anthropic>=0.100",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+smbenum = "smbenum.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["smbenum*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
