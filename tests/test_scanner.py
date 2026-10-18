@@ -20,14 +20,15 @@ class FakeScanSMB:
         for name in self.tree.get(path, []):
             child = f"{path}/{name}" if path else name
             is_dir = child in self.tree
-            entries.append({"name": name, "is_dir": is_dir, "size": 10})
+            size = 0 if is_dir else len(self.contents.get(child, b""))
+            entries.append({"name": name, "is_dir": is_dir, "size": size})
         return {"share": share, "path": path, "entries": entries,
                 "truncated": False, "total_seen": len(entries)}
 
     def read_file(self, share, path, offset=0, max_bytes=65536):
         self.read_calls.append(path)
-        data = self.contents.get(path, b"")
-        return {"share": share, "path": path, "offset": 0, "size": len(data),
+        data = self.contents.get(path, b"")[offset: offset + max_bytes]
+        return {"share": share, "path": path, "offset": offset, "size": len(data),
                 "truncated": False, "content_b64": base64.b64encode(data).decode()}
 
 
@@ -172,3 +173,39 @@ def test_data_files_surfaced_even_without_regex_hits():
     assert csv_entry["size"] > 0 and csv_entry["tier"] == "yellow"
     # and their content produced no masked matches (proving regex blindness)
     assert not any(m["path"].endswith((".csv", ".json")) for m in result["matches"])
+
+
+# --------------------------------------------------------------------------- #
+# full-content dump (custom-goal mode: EVERY file, no tier filtering)
+# --------------------------------------------------------------------------- #
+from smbenum.scanner import dump_share
+
+
+def test_dump_includes_all_formats():
+    result = dump_share(_tree(), "IT", page_chars=100000)
+    paths = {f["path"] for f in result["files"]}
+    # untiered files that the tier sweep would NEVER open are all here
+    assert {"Scripts/photo.png", "Scripts/helper.cs", "Photos/pic1.jpg"} <= paths
+    # content is decoded text, head_truncated flags big heads
+    entry = next(f for f in result["files"] if f["path"] == "Scripts/users.csv")
+    assert "alex,P@ssw0rd" in entry["content"] and not entry["head_truncated"]
+    assert result["files_total"] == 9 and result["next_skip"] is None
+
+
+def test_dump_paging_and_per_file_head():
+    fake = FakeScanSMB(tree={"": ["big.bin"]},
+                       contents={"big.bin": b"A" * 5000})
+    result = dump_share(fake, "IT", per_file_bytes=1000, page_chars=2000)
+    entry = result["files"][0]
+    assert len(entry["content"]) == 1000 and entry["head_truncated"] is True
+    assert entry["size"] == 5000
+
+    # page_chars packing: many files split across pages via next_skip chain
+    fake2 = FakeScanSMB(tree={"": [f"f{i}.txt" for i in range(6)]},
+                        contents={f"f{i}.txt": b"x" * 900 for i in range(6)})
+    page1 = dump_share(fake2, "IT", page_chars=2000)   # ~2 files per page
+    assert len(page1["files"]) == 2 and page1["next_skip"] == 2
+    page2 = dump_share(fake2, "IT", page_chars=2000, skip_files=2)
+    assert page2["files_skip"] == 2 and page2["next_skip"] == 4
+    last = dump_share(fake2, "IT", page_chars=2000, skip_files=4)
+    assert len(last["files"]) == 2 and last["next_skip"] is None

@@ -20,6 +20,9 @@ class Tool:
     description: str
     schema: dict
     handler: Callable[[AgentSession, dict], Any]
+    # optional per-tool override of the executor's result_char_cap — used by
+    # smb_dump_share whose pages are intentionally larger than the default
+    char_cap: int | None = None
 
     def anthropic_spec(self) -> dict:
         return {"name": self.name, "description": self.description,
@@ -115,6 +118,26 @@ def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
     # deterministic byte accounting toward the run budget
     ctx.budget.bytes_read += int(result["stats"]["bytes_scanned"])
     ctx.scan_results.append(result)   # harness-side copy for the HTML report
+    return result
+
+
+def _smb_dump_share(ctx: AgentSession, args: dict) -> Any:
+    """Full-content dump for custom goals: EVERY file, every extension."""
+    from ..scanner import dump_share
+
+    session = ctx.smb(args["host"])
+    remaining = max(0, ctx.policy.max_total_read_bytes - ctx.budget.bytes_read)
+    result = dump_share(
+        session, args["share"], args.get("path", "") or "",
+        depth=int(args.get("depth", ctx.policy.dump_depth)),
+        per_file_bytes=int(ctx.policy.dump_per_file_bytes),
+        page_chars=int(ctx.policy.dump_page_chars),
+        max_files=int(args.get("max_files", ctx.policy.dump_max_files)),
+        max_total_bytes=remaining,
+        skip_files=int(args.get("skip_files", 0)),
+        on_event=ctx.emit,
+    )
+    ctx.budget.bytes_read += int(result["stats"]["bytes_read"])
     return result
 
 
@@ -223,6 +246,31 @@ REGISTRY: dict[str, Tool] = {t.name: t for t in [
                                             "(use next_skip from the previous result)"},
         }, ["host", "share"]),
         handler=_smb_scan_share,
+    ),
+    Tool(
+        name="smb_dump_share",
+        description=("FULL-CONTENT review: dumps EVERY file in a share — any "
+                     "extension, no filtering — as decoded text (each file's "
+                     "first ~16KB). This is the tool for 'review/read everything' "
+                     "tasks where nothing should be pre-filtered. Results are "
+                     "PAGED by size: while 'next_skip' is set, call again with "
+                     "skip_files=next_skip until null so you see EVERY file. "
+                     "'head_truncated' on an entry means the file is longer than "
+                     "the per-file head — page into it with smb_read_file+offset "
+                     "if its content looks interesting."),
+        schema=_obj({
+            "host": {"type": "string"},
+            "share": {"type": "string"},
+            "path": {"type": "string", "description": "start directory (default: share root)"},
+            "depth": {"type": "integer", "minimum": 1, "maximum": 8},
+            "max_files": {"type": "integer", "minimum": 1},
+            "skip_files": {"type": "integer", "minimum": 0,
+                           "description": "paging: skip this many dumped files "
+                                          "(use next_skip from the previous result)"},
+        }, ["host", "share"]),
+        handler=_smb_dump_share,
+        # dump pages are intentionally larger than the default 8K result cap
+        char_cap=40000,
     ),
 ]}
 

@@ -139,7 +139,7 @@ def test_registry_is_read_only_surface():
     names = set(REGISTRY)
     assert names == {"domain_list_computers", "smb_list_shares", "smb_list_dir",
                      "smb_read_file", "smb_stat", "smb_get_permissions", "sid_lookup",
-                     "smb_scan_share"}
+                     "smb_scan_share", "smb_dump_share"}
     specs = anthropic_tools()
     assert all(spec["input_schema"]["additionalProperties"] is False for spec in specs)
     assert all(spec["strict"] is True for spec in specs)
@@ -439,3 +439,21 @@ def test_loop_captures_transcript(session):
     res = loop.transcript[2]["items"][0]
     assert res["name"] == "smb_list_shares" and res["ok"] and res["chars"] > 0
     assert loop.transcript[3]["text"] == "## final report"
+
+
+def test_registry_includes_dump_tool():
+    assert "smb_dump_share" in REGISTRY
+    assert REGISTRY["smb_dump_share"].char_cap == 40000
+
+
+def test_dump_tool_char_cap_overrides_policy(session):
+    # policy cap 300 would truncate any dump page; the tool's 40K cap wins
+    session.policy.result_char_cap = 300
+    session.smb("x").file_contents["big.txt"] = b"z" * 3000
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "big.txt",
+        "max_bytes": 4096})
+    assert "[TRUNCATED" in out["content"]          # normal tool: policy cap applies
+    out2 = _executor(session).execute("smb_dump_share", {
+        "host": "filesrv01.corp.local", "share": "IT"})
+    assert "[TRUNCATED" not in out2["content"]     # dump tool: 40K cap applies

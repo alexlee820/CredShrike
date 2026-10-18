@@ -73,7 +73,9 @@ class ToolExecutor:
         result, redactions = self._redact_result(result)
         if redactions:
             self.session.redactions_applied += redactions
-        content, capped = self._render(result)
+        tool = REGISTRY.get(tool_name)
+        char_cap = getattr(tool, "char_cap", None) if tool else None
+        content, capped = self._render(result, cap=char_cap)
         if redactions:
             # appended AFTER truncation so the note always survives
             content += f"\n[+{redactions} redaction(s) applied per session policy]"
@@ -244,15 +246,16 @@ class ToolExecutor:
         return obj, 0
 
     # ------------------------------------------------------------------ #
-    def _render(self, result: Any) -> tuple[str, bool]:
-        """Serialize + truncate to the policy char cap with a paging marker."""
+    def _render(self, result: Any, cap: int | None = None) -> tuple[str, bool]:
+        """Serialize + truncate (per-tool override > policy cap) with a
+        paging marker."""
         try:
             text = json.dumps(result, default=str)
         except Exception:  # noqa: BLE001
             text = str(result)
-        cap = self.policy.result_char_cap
-        if len(text) <= cap:
+        limit = cap or self.policy.result_char_cap
+        if len(text) <= limit:
             return text, False
-        marker = (f"…[TRUNCATED at {cap} chars of {len(text)} — page through with "
-                  f"offset/max_entries/max_bytes or narrow the query]")
-        return text[:cap] + marker, True
+        marker = (f"…[TRUNCATED at {limit} chars of {len(text)} — page through with "
+                  f"offset/max_entries/max_bytes/skip or narrow the query]")
+        return text[:limit] + marker, True

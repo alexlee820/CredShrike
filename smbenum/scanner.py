@@ -151,6 +151,96 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
     return result
 
 
+def dump_share(session, share: str, path: str = "", *, depth: int = 6,
+               per_file_bytes: int = 16384, page_chars: int = 24000,
+               max_files: int = 500, max_total_bytes: int = 5 * 1024 * 1024,
+               skip_files: int = 0, on_event=None) -> dict:
+    """FULL-CONTENT dump for custom goals: EVERY file regardless of extension
+    (no tier triage — that's the snaffler preset's job). Walks the share,
+    reads each file's head (up to per_file_bytes), and returns pages of
+    {path, size, truncated, content} as decoded text, sized to ~page_chars
+    with a skip_files paging handle. Byte budget is the backstop."""
+    import base64 as _b64
+    emit = on_event or (lambda kind, data: None)
+    stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
+             "bytes_read": 0, "errors": 0}
+    collected: list[dict] = []
+    truncated = False
+    stop_reason = None
+
+    queue = [((path or "").strip("/"), 0)]
+    seen_dirs: set[str] = set()
+    while queue:
+        current, level = queue.pop(0)
+        if current in seen_dirs:
+            continue
+        seen_dirs.add(current)
+        stats["dirs_walked"] += 1
+        emit("walk", {"path": current or "/", "depth": level})
+        try:
+            listing = session.list_dir(share, current, max_entries=1000)
+        except Exception as exc:  # noqa: BLE001
+            stats["errors"] += 1
+            emit("walk_error", {"path": current, "error": str(exc)[:120]})
+            continue
+        for entry in listing.get("entries", []):
+            name = entry.get("name", "")
+            if name in (".", ".."):
+                continue
+            stats["files_seen"] += 1
+            child = f"{current}/{name}" if current else name
+            if entry.get("is_dir"):
+                if level < depth:
+                    queue.append((child, level + 1))
+                continue
+            if stats["files_dumped"] >= max_files:
+                truncated, stop_reason = True, f"max_files={max_files} reached"
+                queue.clear()
+                break
+            if stats["bytes_read"] >= max_total_bytes:
+                truncated, stop_reason = True, "byte budget reached"
+                queue.clear()
+                break
+            try:
+                read = session.read_file(share, child, max_bytes=per_file_bytes)
+                data = _b64.b64decode(read.get("content_b64", ""))
+            except Exception as exc:  # noqa: BLE001
+                stats["errors"] += 1
+                emit("read_error", {"path": child, "error": str(exc)[:120]})
+                continue
+            stats["files_dumped"] += 1
+            stats["bytes_read"] += len(data)
+            emit("dump", {"path": child, "size": entry.get("size", len(data))})
+            collected.append({
+                "path": child,
+                "size": int(entry.get("size", len(data))),
+                "head_truncated": len(data) >= per_file_bytes,
+                "content": data.decode("utf-8", errors="replace"),
+            })
+
+    # page by cumulative content size so each result fits its char budget
+    total = len(collected)
+    page: list[dict] = []
+    used = 0
+    idx = skip_files
+    while idx < total:
+        entry = collected[idx]
+        if page and used + len(entry["content"]) > page_chars:
+            break
+        page.append(entry)
+        used += len(entry["content"]) + len(entry["path"]) + 64
+        idx += 1
+    result = {
+        "share": share, "root": path or "",
+        "files": page, "files_skip": skip_files, "files_total": total,
+        "next_skip": idx if idx < total else None,
+        "truncated": truncated, "stop_reason": stop_reason,
+        "stats": stats,
+    }
+    emit("done", {"files_total": total, "truncated": truncated, "stats": stats})
+    return result
+
+
 def _find_matches(text: str, compiled: list[dict]) -> list[tuple]:
     """Yield (line_no, line_text, pattern_name, group_start, group_end) for
     every regex hit. Group offsets are translated to be relative to the

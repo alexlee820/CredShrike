@@ -46,6 +46,11 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "scan_tiers": ["red", "yellow"],
     "scan_use_default_patterns": True,
     "scan_extra_patterns": {},          # {name: regex}; same name replaces the built-in
+    # --- full-content dump tool (smb_dump_share — custom-goal mode) ---------
+    "dump_depth": 6,
+    "dump_per_file_bytes": 16384,       # head sent per file
+    "dump_page_chars": 24000,           # page target (tool char_cap is 40000)
+    "dump_max_files": 500,
     # --- LLM endpoint (Anthropic-compatible providers: GLM, DeepSeek, ...) ---
     "api_base_url": "",                 # empty = official Anthropic API
     "api_key": "",                      # empty = ANTHROPIC_API_KEY env / auth profile
@@ -78,6 +83,10 @@ class Policy:
     scan_tiers: list[str] = field(default_factory=lambda: list(DEFAULT_POLICY_DICT["scan_tiers"]))
     scan_use_default_patterns: bool = DEFAULT_POLICY_DICT["scan_use_default_patterns"]
     scan_extra_patterns: dict[str, str] = field(default_factory=dict)
+    dump_depth: int = DEFAULT_POLICY_DICT["dump_depth"]
+    dump_per_file_bytes: int = DEFAULT_POLICY_DICT["dump_per_file_bytes"]
+    dump_page_chars: int = DEFAULT_POLICY_DICT["dump_page_chars"]
+    dump_max_files: int = DEFAULT_POLICY_DICT["dump_max_files"]
     api_base_url: str = DEFAULT_POLICY_DICT["api_base_url"]
     api_key: str = DEFAULT_POLICY_DICT["api_key"]
     thinking_mode: str = DEFAULT_POLICY_DICT["thinking_mode"]
