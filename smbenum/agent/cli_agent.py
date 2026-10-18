@@ -56,6 +56,30 @@ SNAFFLER_PRESET = (
 )
 
 
+def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> str:
+    """Generate the standalone HTML report next to the audit log."""
+    from pathlib import Path
+    from .findings import extract_findings
+    findings, extraction_error = [], ""
+    try:
+        findings = extract_findings(client, policy, loop.messages)
+    except Exception as exc:  # noqa: BLE001 - report must still build
+        extraction_error = f"{type(exc).__name__}: {exc}"
+    from ..report import write_report
+    red = session.credential.redacted()
+    path = str(Path(audit.path).with_suffix(".report.html"))
+    write_report(path,
+                 context={"principal": red["principal"], "auth_type": red["auth_type"],
+                          "scope": session.allowed_hosts, "model": policy.model,
+                          "endpoint": policy.api_base_url or "api.anthropic.com"},
+                 findings=findings, scan_results=session.scan_results,
+                 flagged=session.flagged_files, report_md=report_md,
+                 audit_path=audit.path, redactions=session.redactions_applied,
+                 extraction_error=extraction_error)
+    print(f"[agent] HTML report: {path}")
+    return path
+
+
 def _make_client(policy=None):
     try:
         from anthropic import Anthropic
@@ -87,9 +111,11 @@ def cmd_agent(args) -> None:
         if not goal and args.preset == "snaffler":
             goal = SNAFFLER_PRESET
         if goal:
-            print(loop.run(goal))
+            report = loop.run(goal)
+            print(report)
+            _emit_html_report(loop, session, policy, audit, client, report)
             return
-        print("[agent] ready — describe a goal, or /budget / /quit")
+        print("[agent] ready — describe a goal, or /budget /flagged /quit")
         while True:
             try:
                 goal = input("goal> ").strip()
@@ -111,7 +137,9 @@ def cmd_agent(args) -> None:
                     print(_json.dumps(entry, ensure_ascii=False))
                 continue
             try:
-                print(loop.run(goal))
+                report = loop.run(goal)
+                print(report)
+                _emit_html_report(loop, session, policy, audit, client, report)
             except KeyboardInterrupt:
                 print("\n[interrupted — conversation kept, budgets still apply]")
             except Exception as exc:  # noqa: BLE001 - REPL boundary

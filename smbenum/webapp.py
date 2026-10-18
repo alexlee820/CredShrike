@@ -14,12 +14,13 @@ Design:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 from .agent.audit import AuditLog
 from .agent.loop import AgentLoop
@@ -55,6 +56,7 @@ class RunState:
         self.status = "starting"     # starting|running|done|error|stopped
         self.lines: list[str] = []
         self.report: str = ""
+        self.report_html_path = ""
         self.error: str = ""
         self.created = time.time()
         self.audit_path = ""
@@ -74,6 +76,7 @@ class RunState:
             "id": self.id, "status": self.status, "created": self.created,
             "lines": self.lines[-800:],
             "report": self.report, "error": self.error,
+            "report_html": self.report_html_path or None,
             "audit_path": self.audit_path,
             "budget": session.budget.snapshot() if session else None,
             "flagged": session.flagged_files if session else [],
@@ -134,6 +137,8 @@ def _execute_run(state: RunState) -> None:
         if not goal:
             raise ValueError("no goal or preset given")
         state.report = loop.run(goal)
+        state.report_html_path = _emit_report(loop, session, policy, audit, client,
+                                              state.report)
         state.status = "stopped" if loop.stop_requested else "done"
     except Exception as exc:  # noqa: BLE001 — surface to the UI
         state.error = f"{type(exc).__name__}: {exc}"
@@ -144,6 +149,29 @@ def _execute_run(state: RunState) -> None:
                 state.session.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _emit_report(loop, session, policy, audit, client, report_md: str) -> str:
+    """Build the standalone HTML report next to this run's audit log."""
+    from pathlib import Path
+    from .agent.findings import extract_findings
+    findings, extraction_error = [], ""
+    try:
+        findings = extract_findings(client, policy, loop.messages)
+    except Exception as exc:  # noqa: BLE001 - report must still build
+        extraction_error = f"{type(exc).__name__}: {exc}"
+    from .report import write_report
+    red = session.credential.redacted()
+    path = str(Path(audit.path).with_suffix(".report.html"))
+    write_report(path,
+                 context={"principal": red["principal"], "auth_type": red["auth_type"],
+                          "scope": session.allowed_hosts, "model": policy.model,
+                          "endpoint": policy.api_base_url or "api.anthropic.com"},
+                 findings=findings, scan_results=session.scan_results,
+                 flagged=session.flagged_files, report_md=report_md,
+                 audit_path=audit.path, redactions=session.redactions_applied,
+                 extraction_error=extraction_error)
+    return path
 
 
 def _fmt_event(kind: str, data: dict) -> str:
@@ -245,6 +273,11 @@ def followup_goal(run_id):
         try:
             state.status = "running"
             state.report = state.loop.run(goal)
+            session = state.session
+            state.report_html_path = _emit_report(
+                state.loop, session, session.policy,
+                session.audit, _client_factory() if _client_factory
+                else _build_client(state.params), state.report)
             state.status = "stopped" if state.loop.stop_requested else "done"
         except Exception as exc:  # noqa: BLE001
             state.error = f"{type(exc).__name__}: {exc}"
@@ -262,6 +295,15 @@ def stop_run(run_id):
     if state.loop is not None:
         state.loop.stop_requested = True
     return jsonify({"ok": True})
+
+
+@app.route("/api/runs/<run_id>/report_html")
+def report_html(run_id):
+    state = RUNS.get(run_id)
+    if state is None or not state.report_html_path or not os.path.exists(state.report_html_path):
+        return jsonify({"error": "no report yet"}), 404
+    with open(state.report_html_path, "r", encoding="utf-8") as fh:
+        return Response(fh.read(), mimetype="text/html")
 
 
 def serve(bind: str = "127.0.0.1", port: int = 8080):

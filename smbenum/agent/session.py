@@ -81,6 +81,8 @@ class AgentSession:
         # total redaction hits scrubbed from tool results before they reached
         # the LLM (harness-side counter for /budget)
         self.redactions_applied = 0
+        # full results of every smb_scan_share sweep (for the HTML report)
+        self.scan_results: list[dict] = []
         # optional progress hook for UIs/echo: emit(kind, data) — set by the
         # web app so mid-sweep progress reaches the browser
         self.event_hook = None

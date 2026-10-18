@@ -1,5 +1,6 @@
 """Web UI tests via the Flask test client + a scripted fake LLM (no key)."""
 
+import json
 import threading
 import time
 from types import SimpleNamespace
@@ -31,8 +32,17 @@ class SlowFakeMessages:
                 stop_reason="tool_use",
                 content=[SimpleNamespace(type="tool_use", id="t1", name="smb_list_shares",
                                          input={"host": "filesrv01.corp.local"})])
-        return SimpleNamespace(stop_reason="end_turn",
-                               content=[SimpleNamespace(type="text", text="## report ok")])
+        if self.calls == 2:
+            return SimpleNamespace(stop_reason="end_turn",
+                                   content=[SimpleNamespace(type="text", text="## report ok")])
+        # calls >= 3: findings-extraction follow-up (no tools passed)
+        findings_payload = json.dumps({"findings": [{
+            "severity": "high", "category": "credential", "host": "filesrv01",
+            "share": "IT", "path": "creds.ps1", "username": "svc",
+            "secret": "pwd123", "evidence": "smb_read_file", "note": ""}]})
+        return SimpleNamespace(
+            stop_reason="end_turn",
+            content=[SimpleNamespace(type="text", text=findings_payload)])
 
 
 @pytest.fixture
@@ -93,6 +103,13 @@ def test_run_lifecycle_with_report(client, fake_client):
     assert "pw" not in __import__("json").dumps(s["context"])
     # budget snapshot present
     assert s["budget"]["tool_calls"] == 1
+    # HTML report generated and served, with the extracted credential
+    assert s["report_html"], "report_html path missing"
+    page = client.get(f"/api/runs/{run_id}/report_html")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "Credentials" in body and "svc" in body and "pwd123" in body
+    assert "data-real" in body                     # secret masked until reveal
 
 
 def test_followup_goal_reuses_session(client, fake_client):

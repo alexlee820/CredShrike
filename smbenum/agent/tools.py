@@ -104,6 +104,7 @@ def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
     )
     # deterministic byte accounting toward the run budget
     ctx.budget.bytes_read += int(result["stats"]["bytes_scanned"])
+    ctx.scan_results.append(result)   # harness-side copy for the HTML report
     return result
 
 
