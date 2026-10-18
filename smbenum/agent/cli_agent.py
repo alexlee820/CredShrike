@@ -60,6 +60,20 @@ SNAFFLER_PRESET = (
     "your scope evidence."
 )
 
+FULL_PRESET = (
+    "Run a FULL-CONTENT review of every share on the in-scope host(s): call "
+    "smb_dump_share on each share — it sends EVERY file regardless of format, "
+    "as decoded text. Pages are chained: while next_skip is set, call again "
+    "with skip_files=next_skip until it is null, so you READ EVERY FILE. "
+    "head_truncated entries hide content beyond the per-file head — page into "
+    "them with smb_read_file + offset when the visible head looks interesting. "
+    "Extract every credential or sensitive item you see (usernames, passwords, "
+    "keys, tokens — including plain CSV/JSON rows), assess exposure with "
+    "smb_get_permissions where relevant, and produce the final report. If the "
+    "dump stops on byte-budget truncation, record exactly where it stopped "
+    "under Limitations. Use the dump stats as your scope evidence."
+)
+
 
 def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> str:
     """Generate the standalone HTML report next to the audit log."""
@@ -118,6 +132,8 @@ def cmd_agent(args) -> None:
         goal = args.goal
         if not goal and args.preset == "snaffler":
             goal = SNAFFLER_PRESET
+        elif not goal and args.preset == "full":
+            goal = FULL_PRESET
         if goal:
             report = loop.run(goal)
             print(report)
@@ -184,9 +200,10 @@ def register(subparsers) -> None:
     p.add_argument("--scan-patterns", default=None,
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")
-    p.add_argument("--preset", choices=["snaffler"], default=None,
-                   help="use a canned goal: 'snaffler' = deterministic credential "
-                        "sweep first, then model-side judgment of every match")
+    p.add_argument("--preset", choices=["snaffler", "full"], default=None,
+                   help="canned goal: 'snaffler' = tier/regex sweep then judgment; "
+                        "'full' = smb_dump_share EVERY file (any format) then "
+                        "extraction — full-content review")
     p.add_argument("--api-base-url", default=None,
                    help="Anthropic-compatible endpoint override, e.g. "
                         "https://api.deepseek.com/anthropic or the GLM /api/anthropic URL "

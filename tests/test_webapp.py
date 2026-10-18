@@ -209,3 +209,12 @@ def test_custom_endpoint_disables_thinking_by_default():
     policy3 = Policy()
     webapp._apply_policy_overrides(policy3, {})
     assert policy3.thinking_mode == "adaptive"              # official API unchanged
+
+
+def test_full_preset_goal(client, fake_client):
+    run_id = client.post("/api/runs", json=_params(preset="full", goal="")).get_json()["id"]
+    s = _wait_status(client, run_id, {"done", "error"})
+    assert s["status"] == "done", s.get("error")
+    first_user = fake_client.messages.requests[0]["messages"][0]
+    assert "FULL-CONTENT review" in str(first_user.get("content", ""))
+    assert "smb_dump_share" in str(first_user.get("content", ""))

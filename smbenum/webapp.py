@@ -27,7 +27,7 @@ from .agent.loop import AgentLoop
 from .agent.session import AgentSession
 from .config import Policy
 from .credentials import Credential
-from .agent.cli_agent import SNAFFLER_PRESET
+from .agent.cli_agent import SNAFFLER_PRESET, FULL_PRESET
 
 WEB_DIR = Path(__file__).parent / "web"
 
@@ -132,8 +132,11 @@ def _execute_run(state: RunState) -> None:
         state.loop = loop
 
         goal = params.get("goal") or ""
-        if params.get("preset") == "snaffler":
-            goal = SNAFFLER_PRESET if not goal else goal
+        preset = params.get("preset") or ""
+        if preset == "snaffler" and not goal:
+            goal = SNAFFLER_PRESET
+        elif preset == "full" and not goal:
+            goal = FULL_PRESET
         if not goal:
             raise ValueError("no goal or preset given")
         state.report = loop.run(goal)
