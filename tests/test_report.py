@@ -92,7 +92,7 @@ def test_report_html_contains_all_sections(tmp_path):
                    "IPC$", "docs"):
         assert marker in html, marker
     # tabbed layout: nav + panels + hash deep-linking
-    assert html.count('class="tab-panel') == 9 and 'data-tab="creds"' in html
+    assert html.count('class="tab-panel') == 10 and 'data-tab="creds"' in html and 'data-tab="transcript"' in html
     assert 'function activate(' in html and '@media print' in html
     # secret masked by default, real value only in the reveal attribute
     assert "Sup3rS3cret!" in html                     # present for the toggle...
@@ -102,3 +102,21 @@ def test_report_html_contains_all_sections(tmp_path):
                         findings=[], scan_results=[], flagged=[], report_md="",
                         audit_path=audit_path)
     assert "smbenum" in open(path, encoding="utf-8").read()[:2000]
+
+
+def test_report_transcript_tab():
+    html = build_report_html(
+        context={"principal": "x"}, findings=[], scan_results=[], flagged=[],
+        report_md="final", audit_path="",
+        transcript=[
+            {"kind": "goal", "text": "find passwords"},
+            {"kind": "assistant", "text": "starting sweep",
+             "tools": [{"name": "smb_scan_share", "input": {"share": "IT"}}]},
+            {"kind": "tool_results", "items": [{"name": "smb_scan_share", "ok": True,
+                                                "chars": 4321}]},
+            {"kind": "assistant", "text": "found nothing", "tools": []},
+        ])
+    assert 'data-tab="transcript"' in html and "Transcript" in html
+    assert "find passwords" in html and "AI · turn 1" in html
+    assert "smb_scan_share" in html and "(4321c)" in html
+    assert "AI · turn 2" in html

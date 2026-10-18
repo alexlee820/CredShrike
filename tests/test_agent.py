@@ -412,3 +412,30 @@ def test_domain_source_session_default_and_override(session):
     # per-call choice wins over the session default
     tool.handler(session, {"source": "ldap"})
     assert captured["source"] == "ldap"
+
+
+# --------------------------------------------------------------------------- #
+# AI transcript capture (for the HTML report)
+# --------------------------------------------------------------------------- #
+def test_loop_captures_transcript(session):
+    client = SimpleNamespace(messages=FakeMessages([
+        SimpleNamespace(stop_reason="tool_use",
+                        content=[_text("starting with shares"),
+                                 _tool_use("t1", "smb_list_shares",
+                                           {"host": "filesrv01.corp.local"})]),
+        SimpleNamespace(stop_reason="end_turn", content=[_text("## final report")]),
+    ]))
+    from smbenum.agent.loop import AgentLoop
+    loop = AgentLoop(client, session, session.policy, session.audit)
+    loop.run("check the shares")
+
+    kinds = [e["kind"] for e in loop.transcript]
+    assert kinds == ["goal", "assistant", "tool_results", "assistant"]
+    assert loop.transcript[0]["text"] == "check the shares"
+    first = loop.transcript[1]
+    assert first["text"] == "starting with shares"
+    assert first["tools"] == [{"name": "smb_list_shares",
+                               "input": {"host": "filesrv01.corp.local"}}]
+    res = loop.transcript[2]["items"][0]
+    assert res["name"] == "smb_list_shares" and res["ok"] and res["chars"] > 0
+    assert loop.transcript[3]["text"] == "## final report"

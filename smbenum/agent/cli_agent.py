@@ -77,7 +77,8 @@ def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> s
                  audit_path=audit.path, redactions=session.redactions_applied,
                  extraction_error=extraction_error,
                  domain_computers=session.domain_computers,
-                 share_inventories=session.share_inventories)
+                 share_inventories=session.share_inventories,
+                 transcript=loop.transcript)
     print(f"[agent] HTML report: {path}")
     return path
 

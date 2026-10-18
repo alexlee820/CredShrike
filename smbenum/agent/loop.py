@@ -40,6 +40,9 @@ class AgentLoop:
         self.system = build_system_prompt(session.credential, policy,
                                           session.allowed_hosts, session.dc)
         self.messages: list[dict] = []
+        # every AI response, captured as plain dicts for the HTML report:
+        # [{"kind":"goal"|"assistant"|"tool_results", ...}] in turn order
+        self.transcript: list[dict] = []
         self._budget_final_requested = False
         self._executor = None
         self.stop_requested = False   # set by the UI/REPL to break the loop
@@ -56,6 +59,7 @@ class AgentLoop:
         """Pursue one goal to completion; returns the final assistant text.
         Conversation state persists across calls (REPL follow-ups)."""
         self.messages.append({"role": "user", "content": goal})
+        self.transcript.append({"kind": "goal", "text": goal})
         while True:
             if self.stop_requested:
                 self.echo("[stopped] interrupted by user — returning partial state")
@@ -63,6 +67,17 @@ class AgentLoop:
                         "live log and audit trail for what was collected)")
             response = self._create()
             self.messages.append({"role": "assistant", "content": response.content})
+
+            # capture the AI response for the report transcript
+            entry = {"kind": "assistant", "text": "", "tools": []}
+            for block in response.content:
+                btype = getattr(block, "type", "")
+                if btype == "text":
+                    entry["text"] += getattr(block, "text", "")
+                elif btype == "tool_use":
+                    entry["tools"].append({"name": block.name,
+                                           "input": dict(block.input or {})})
+            self.transcript.append(entry)
 
             if response.stop_reason == "tool_use":
                 tool_results = self._run_tool_uses(response)
@@ -91,6 +106,7 @@ class AgentLoop:
     def _run_tool_uses(self, response) -> list[dict]:
         """Execute every tool_use block; all results in ONE user message."""
         results = []
+        transcript_items = []
         for block in response.content:
             if getattr(block, "type", "") != "tool_use":
                 continue
@@ -98,12 +114,17 @@ class AgentLoop:
             outcome = self.executor.execute(block.name, dict(block.input or {}))
             self.echo(f"  ← {block.name}: "
                       f"{'error' if outcome['is_error'] else 'ok'} ({len(outcome['content'])} chars)")
+            transcript_items.append({"name": block.name,
+                                     "ok": not outcome["is_error"],
+                                     "chars": len(outcome["content"])})
             results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
                 "content": outcome["content"],
                 "is_error": outcome["is_error"],
             })
+        if transcript_items:
+            self.transcript.append({"kind": "tool_results", "items": transcript_items})
         return results
 
     def _create(self):

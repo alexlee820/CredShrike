@@ -55,6 +55,13 @@
   .tab-panel { display:none; padding-top:14px; }
   .tab-panel.active { display:block; }
   .tab-panel h2 { margin-top:10px; }
+  .turn { border-left:2px solid var(--line); padding:4px 14px; margin:12px 0; }
+  .turn.goal { border-left-color:var(--acc); }
+  .turn.results { border-left-color:#2c3a2c; }
+  .who { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  .say { white-space:pre-wrap; margin:4px 0; }
+  .call { font-family:Consolas,monospace; font-size:12px; color:var(--acc); margin:2px 0; }
+  .call .ok { color:#43d17c; } .call .err { color:#ff6b6b; }
   @media print {
     .tabs { display:none; }
     .tab-panel { display:block !important; page-break-before:always; }
@@ -67,7 +74,7 @@
   <span>credential <b>hackaday.lablexlee</b> (password)</span>
   <span>model <b>glm-5.3</b></span>
   <span>endpoint <b>api.z.ai</b></span>
-  <span>generated <b>2026-10-18 18:50:11 UTC</b></span>
+  <span>generated <b>2026-10-18 18:56:15 UTC</b></span>
   <span>audit <b></b></span>
   <span>redactions applied <b>0</b></span>
 </div>
@@ -81,6 +88,7 @@
   <button class="tab" data-tab="shares">Shares<span class="badge">5</span></button>
   <button class="tab" data-tab="smb">SMB activity<span class="badge">0</span></button>
   <button class="tab" data-tab="aireport">AI report</button>
+  <button class="tab" data-tab="transcript">Transcript<span class="badge">2</span></button>
   <button class="tab" data-tab="audit">Audit<span class="badge">0</span></button>
 </nav>
 
@@ -107,7 +115,7 @@
 <div class="tab-panel" id="findings">
   <h2>All findings</h2>
   <table><tr><th>severity</th><th>category</th><th>location</th><th>note</th><th>evidence</th></tr>
-  <tr><td><span class='sev high'>high</span></td><td>credential</td><td class='path'>DC01/SYSVOL/demo.ps1</td><td>sample row</td><td class='dim ev'>smb_read_file</td></tr></table>
+  <tr><td><span class='sev high'>high</span></td><td>credential</td><td class='path'>DC01/SYSVOL/demo.ps1</td><td>sample</td><td class='dim ev'>smb_read_file</td></tr></table>
 </div>
 
 <div class="tab-panel" id="hits">
@@ -140,7 +148,15 @@
 
 <div class="tab-panel" id="aireport">
   <h2>AI final report (verbatim)</h2>
-  <pre class="report">Sample AI report body (demo row for preview).</pre>
+  <pre class="report">Sample final report body.</pre>
+</div>
+
+<div class="tab-panel" id="transcript">
+  <h2>AI transcript — every response, in order</h2>
+  <div class='turn goal'><div class='who'>You</div><div class='say'>audit the DC shares</div></div>
+<div class='turn'><div class='who'>AI · turn 1</div><div class='say'>I&#x27;ll enumerate the shares first.</div><div class='call'>→ smb_list_shares({&quot;host&quot;: &quot;DC01.hackaday.lab&quot;})</div></div>
+<div class='turn results'><div class='who'>results</div><div class='call'><span class='ok'>smb_list_shares ok (412c)</span></div></div>
+<div class='turn'><div class='who'>AI · turn 2</div><div class='say'>Five standard DC shares found. Done.</div></div>
 </div>
 
 <div class="tab-panel" id="audit">

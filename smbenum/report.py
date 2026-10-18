@@ -56,11 +56,43 @@ def _read_audit(audit_path: str) -> list[dict]:
     return entries
 
 
+def _render_transcript(transcript: list) -> str:
+    """Turn the captured loop transcript into HTML turns."""
+    if not transcript:
+        return "<p class='dim'>no transcript captured</p>"
+    turns = []
+    turn_no = 0
+    for entry in transcript:
+        kind = entry.get("kind")
+        if kind == "goal":
+            turns.append(
+                "<div class='turn goal'><div class='who'>You</div>"
+                f"<div class='say'>{_esc(entry.get('text', ''))}</div></div>")
+        elif kind == "assistant":
+            turn_no += 1
+            tools = "".join(
+                f"<div class='call'>→ {_esc(t['name'])}({_esc(json.dumps(t['input'], ensure_ascii=False, default=str))})</div>"
+                for t in entry.get("tools", []))
+            say = _esc(entry.get("text", "")) or "<span class='dim'>(no narration)</span>"
+            turns.append(
+                f"<div class='turn'><div class='who'>AI · turn {turn_no}</div>"
+                f"<div class='say'>{say}</div>{tools}</div>")
+        elif kind == "tool_results":
+            items = " · ".join(
+                f"<span class='{'ok' if i['ok'] else 'err'}'>{_esc(i['name'])} "
+                f"{'ok' if i['ok'] else 'error'} ({i['chars']}c)</span>"
+                for i in entry.get("items", []))
+            turns.append(f"<div class='turn results'><div class='who'>results</div>"
+                         f"<div class='call'>{items}</div></div>")
+    return "\n".join(turns)
+
+
 def build_report_html(*, context: dict, findings: list[dict], scan_results: list[dict],
                       flagged: list[dict], report_md: str, audit_path: str,
                       redactions: int = 0, extraction_error: str = "",
                       domain_computers: Optional[list] = None,
-                      share_inventories: Optional[dict] = None) -> str:
+                      share_inventories: Optional[dict] = None,
+                      transcript: Optional[list] = None) -> str:
     audit = _read_audit(audit_path)
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
@@ -75,6 +107,9 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
     for scan in scan_results:
         for key, value in scan.get("stats", {}).items():
             stats[key] = stats.get(key, 0) + value
+
+    transcript = transcript or []
+    ai_turns = sum(1 for e in transcript if e.get("kind") == "assistant")
 
     computers_rows = "".join(
         f"<tr><td>{_esc(c.get('cn'))}</td>"
@@ -204,6 +239,13 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   .tab-panel {{ display:none; padding-top:14px; }}
   .tab-panel.active {{ display:block; }}
   .tab-panel h2 {{ margin-top:10px; }}
+  .turn {{ border-left:2px solid var(--line); padding:4px 14px; margin:12px 0; }}
+  .turn.goal {{ border-left-color:var(--acc); }}
+  .turn.results {{ border-left-color:#2c3a2c; }}
+  .who {{ color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }}
+  .say {{ white-space:pre-wrap; margin:4px 0; }}
+  .call {{ font-family:Consolas,monospace; font-size:12px; color:var(--acc); margin:2px 0; }}
+  .call .ok {{ color:#43d17c; }} .call .err {{ color:#ff6b6b; }}
   @media print {{
     .tabs {{ display:none; }}
     .tab-panel {{ display:block !important; page-break-before:always; }}
@@ -230,6 +272,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <button class="tab" data-tab="shares">Shares<span class="badge">{total_shares}</span></button>
   <button class="tab" data-tab="smb">SMB activity<span class="badge">{len(reads) + len(flagged)}</span></button>
   <button class="tab" data-tab="aireport">AI report</button>
+  <button class="tab" data-tab="transcript">Transcript<span class="badge">{ai_turns}</span></button>
   <button class="tab" data-tab="audit">Audit<span class="badge">{len(audit)}</span></button>
 </nav>
 
@@ -290,6 +333,11 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
 <div class="tab-panel" id="aireport">
   <h2>AI final report (verbatim)</h2>
   <pre class="report">{_esc(report_md) or '—'}</pre>
+</div>
+
+<div class="tab-panel" id="transcript">
+  <h2>AI transcript — every response, in order</h2>
+  {_render_transcript(transcript)}
 </div>
 
 <div class="tab-panel" id="audit">
