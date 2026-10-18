@@ -83,6 +83,10 @@ class AgentSession:
         self.redactions_applied = 0
         # full results of every smb_scan_share sweep (for the HTML report)
         self.scan_results: list[dict] = []
+        # domain computer inventory (domain_list_computers results, deduped)
+        self.domain_computers: list[dict] = []
+        # per-host share inventory: host -> [share dicts] (smb_list_shares)
+        self.share_inventories: dict[str, list] = {}
         # optional progress hook for UIs/echo: emit(kind, data) — set by the
         # web app so mid-sweep progress reaches the browser
         self.event_hook = None

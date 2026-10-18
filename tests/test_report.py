@@ -74,11 +74,22 @@ def test_report_html_contains_all_sections(tmp_path):
         flagged=[{"host": "h", "share": "IT", "path": "big.zip", "size_bytes": 9999999,
                   "reason": "size gate", "ts": ""}],
         report_md="## Findings\n- stuff",
-        audit_path=audit_path, redactions=2)
+        audit_path=audit_path, redactions=2,
+        domain_computers=[
+            {"cn": "WS01", "dns_name": "ws01.corp.local", "operating_system": "Windows 11",
+             "os_version": "10.0", "is_dc": False, "disabled": False, "description": "dev box"},
+            {"cn": "DC01", "dns_name": "dc01.corp.local", "operating_system": "Server 2022",
+             "os_version": "10.0", "is_dc": True, "disabled": False, "description": ""}],
+        share_inventories={"dc01.corp.local": [
+            {"name": "IT", "type_name": "DISK", "remark": "docs", "special": False},
+            {"name": "IPC$", "type_name": "IPC", "remark": "", "special": True}]})
     # all sections present
     for marker in ("Credentials", "All findings", "Sweep hits", "SMB activity",
                    "Flagged files", "AI final report", "Audit trail", "creds.ps1",
-                   "svc_backup", "big.zip", "glm-5.3"):
+                   "svc_backup", "big.zip", "glm-5.3",
+                   "Domain computers", "Share inventory",
+                   "ws01.corp.local", "dc01.corp.local", "Windows 11",
+                   "IPC$", "docs"):
         assert marker in html, marker
     # secret masked by default, real value only in the reveal attribute
     assert "Sup3rS3cret!" in html                     # present for the toggle...

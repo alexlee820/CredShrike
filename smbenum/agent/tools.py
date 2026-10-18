@@ -38,13 +38,22 @@ def _domain_list_computers(ctx: AgentSession, args: dict) -> Any:
     # model's per-call choice wins; otherwise the session-level config
     # (CLI --source / web UI dropdown) is the default
     source = ctx.directory(args.get("source") or ctx.domain_source or "auto")
-    return {"source": source.name,
-            "computers": [c.to_dict() for c in
-                          source.list_computers(args.get("filter", "") or "")]}
+    computers = [c.to_dict() for c in source.list_computers(args.get("filter", "") or "")]
+    # harness-side inventory for the HTML report (dedupe by sam/dns/cn)
+    seen = {c.get("sam_account") or c.get("dns_name") or c.get("cn")
+            for c in ctx.domain_computers}
+    for c in computers:
+        key = c.get("sam_account") or c.get("dns_name") or c.get("cn")
+        if key not in seen:
+            ctx.domain_computers.append(c)
+            seen.add(key)
+    return {"source": source.name, "computers": computers}
 
 
 def _smb_list_shares(ctx: AgentSession, args: dict) -> Any:
-    return {"host": args["host"], "shares": ctx.smb(args["host"]).list_shares()}
+    shares = ctx.smb(args["host"]).list_shares()
+    ctx.share_inventories[args["host"]] = shares   # harness-side for the report
+    return {"host": args["host"], "shares": shares}
 
 
 def _smb_list_dir(ctx: AgentSession, args: dict) -> Any:

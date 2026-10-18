@@ -94,23 +94,43 @@ class FakeLdapConn:
 
 
 def _fake_entry(dn, attr_pairs):
-    """Build an object shaped like impacket's SearchResultEntry asn1 structures."""
+    """Mirror impacket's pyasn1 SearchResultEntry interface:
+    getComponentByName + iteration + isValue + asOctets."""
+
+    class Val:
+        isValue = True
+
+        def __init__(self, raw):
+            self._raw = raw if isinstance(raw, (bytes, bytearray)) else str(raw).encode()
+
+        def asOctets(self):
+            return self._raw
+
+    class ValSeq(list):
+        isValue = True
 
     class Attr:
-        def __init__(self, name, values):
-            self._name, self._values = name, values
+        isValue = True
 
-        def __getitem__(self, key):
-            return {"type": self._name, "vals": self._values}[key]
+        def __init__(self, name, values):
+            self._type, self._vals = name, ValSeq(Val(v) for v in values)
+
+        def getComponentByName(self, name):
+            return {"type": self._type, "vals": self._vals}[name]
+
+    class AttrSeq(list):
+        isValue = True
 
     class Entry:
+        isValue = True
+
         def __init__(self, dn, attrs):
-            self._dn, self._attrs = dn, attrs
+            self._attrs = AttrSeq(Attr(n, v) for n, v in attrs)
 
-        def __getitem__(self, key):
-            return self._attrs
+        def getComponentByName(self, name):
+            return self._attrs if name == "attributes" else None
 
-    return Entry(dn, [Attr(n, v) for n, v in attr_pairs])
+    return Entry(dn, attr_pairs)
 
 
 @pytest.fixture

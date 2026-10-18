@@ -34,13 +34,31 @@ def decode_sid(raw) -> str:
     return f"S-1-{authority}-" + "-".join(str(s) for s in subs) if subs else f"S-1-{authority}"
 
 
-def _vals_to_str(value_set) -> list:
-    out = []
-    for v in value_set or []:
-        if isinstance(v, bytes):
-            out.append(v)
-        else:
-            out.append(str(v))
+def _as_bytes(value) -> bytes:
+    """pyasn1 OctetString / plain str / bytes -> bytes."""
+    if hasattr(value, "asOctets"):
+        return bytes(value.asOctets())
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    return str(value).encode("utf-8")
+
+
+def _entry_to_attrs(entry) -> dict[str, list[bytes]]:
+    """impacket/pyasn1 SearchResultEntry -> {attr_name: [raw bytes values]}.
+    Real entries are pyasn1 Sequences (component access by NAME, not string
+    subscripts); test fakes mirror the same duck-typed interface."""
+    out: dict[str, list[bytes]] = {}
+    attrs = entry.getComponentByName("attributes")
+    if attrs is None or not getattr(attrs, "isValue", True):
+        return out
+    for attr in attrs:
+        name = str(attr.getComponentByName("type"))
+        values = []
+        vals = attr.getComponentByName("vals")
+        if getattr(vals, "isValue", True):
+            for v in vals:
+                values.append(_as_bytes(v))
+        out[name] = values
     return out
 
 
@@ -61,7 +79,10 @@ class LdapSource:
         if self._conn is not None:
             return self
         scheme = "ldaps" if self.use_ssl else "ldap"
-        url = f"{scheme}://{self.dc}:{self.port}"
+        # NOTE: impacket's LDAPConnection resolves url.netloc verbatim — never
+        # include the port in the URL (default ports only; custom port would
+        # need a manual socket via LDAPConnection(dstIp))
+        url = f"{scheme}://{self.dc}"
         conn = ldap_impacket.LDAPConnection(url, "")
         cred = self.credential
         cred.validate()
@@ -101,10 +122,10 @@ class LdapSource:
                               attributes=["defaultNamingContext"],
                               searchFilter="(objectClass=*)")
         for entry in entries:
-            for attr in entry["attributes"]:
-                if str(attr["type"]) == "defaultNamingContext":
-                    vals = _vals_to_str(attr["vals"])
-                    return vals[0].decode() if vals and isinstance(vals[0], bytes) else (vals[0] if vals else "")
+            attrs = _entry_to_attrs(entry)
+            vals = attrs.get("defaultNamingContext") or []
+            if vals:
+                return vals[0].decode("utf-8", errors="replace")
         return ""
 
     def list_computers(self, filter_ext: str = "",
@@ -119,11 +140,14 @@ class LdapSource:
                               attributes=wanted, searchControls=controls)
         records: list[ComputerRecord] = []
         for entry in answers:
+            if not hasattr(entry, "getComponentByName"):
+                continue  # SearchResultReference / other non-entry responses
+            raw_bytes = _entry_to_attrs(entry)
             raw: dict[str, list] = {}
-            for attr in entry["attributes"]:
-                name = str(attr["type"])
-                raw[name] = _vals_to_str(attr["vals"])
-            if "objectSid" in raw and raw["objectSid"]:
-                raw["objectSid"] = [decode_sid(raw["objectSid"][0])]
+            for name, values in raw_bytes.items():
+                if name == "objectSid" and values:
+                    raw["objectSid"] = [decode_sid(values[0])]
+                else:
+                    raw[name] = [v.decode("utf-8", errors="replace") for v in values]
             records.append(computer_record_from_attributes(raw))
         return records

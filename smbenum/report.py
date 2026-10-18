@@ -58,7 +58,9 @@ def _read_audit(audit_path: str) -> list[dict]:
 
 def build_report_html(*, context: dict, findings: list[dict], scan_results: list[dict],
                       flagged: list[dict], report_md: str, audit_path: str,
-                      redactions: int = 0, extraction_error: str = "") -> str:
+                      redactions: int = 0, extraction_error: str = "",
+                      domain_computers: Optional[list] = None,
+                      share_inventories: Optional[dict] = None) -> str:
     audit = _read_audit(audit_path)
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
@@ -66,10 +68,30 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
     cred_findings = [f for f in findings if f.get("category") == "credential"
                      and (f.get("secret") or f.get("username"))]
     hits = [m for scan in scan_results for m in scan.get("matches", [])]
+    domain_computers = domain_computers or []
+    share_inventories = share_inventories or {}
+    total_shares = sum(len(v) for v in share_inventories.values())
     stats = {}
     for scan in scan_results:
         for key, value in scan.get("stats", {}).items():
             stats[key] = stats.get(key, 0) + value
+
+    computers_rows = "".join(
+        f"<tr><td>{_esc(c.get('cn'))}</td>"
+        f"<td class='path'>{_esc(c.get('dns_name'))}</td>"
+        f"<td>{_esc(c.get('operating_system'))} {_esc(c.get('os_version'))}</td>"
+        f"<td>{'<b class=red>DC</b>' if c.get('is_dc') else '—'}</td>"
+        f"<td>{'⛔' if c.get('disabled') else '✓'}</td>"
+        f"<td class='dim'>{_esc(c.get('description'))}</td></tr>"
+        for c in domain_computers) or \
+        "<tr><td colspan='6' class='dim'>domain_list_computers was not called</td></tr>"
+
+    shares_rows = "".join(
+        f"<tr><td>{_esc(host)}</td><td><b>{_esc(s.get('name'))}</b></td>"
+        f"<td>{_esc(s.get('type_name'))}</td><td class='dim'>{_esc(s.get('remark'))}</td>"
+        f"<td>{'yes' if s.get('special') else '—'}</td></tr>"
+        for host, shares in share_inventories.items() for s in shares) or \
+        "<tr><td colspan='5' class='dim'>no shares were enumerated</td></tr>"
 
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
@@ -161,6 +183,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   .verdict.refused, .verdict.error {{ background:#3d1c1c; color:#ff6b6b; }}
   .tier {{ font-size:11px; font-weight:700; }} .tier.red {{ color:#ff6b6b; }}
   .tier.yellow {{ color:#ffd166; }}
+  .red {{ color:#ff6b6b; }}
   .secret {{ font-family:Consolas,monospace; }}
   .reveal {{ background:#22303d; color:var(--fg); border:0; border-radius:4px;
             font-size:10px; padding:1px 6px; cursor:pointer; }}
@@ -182,6 +205,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
 </div>
 
 <div class="tiles">
+  {tile('domain computers', len(domain_computers))}
+  {tile('shares', total_shares)}
   {tile('files scanned', stats.get('files_scanned', len(reads)))}
   {tile('sweep hits', len(hits))}
   {tile('flagged', len(flagged))}
@@ -190,6 +215,15 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   {tile('tool calls', len(audit))}
 </div>
 {extraction_note}
+
+<h2>Domain computers ({len(domain_computers)})</h2>
+<table><tr><th>name</th><th>dns name</th><th>operating system</th><th>role</th>
+<th>enabled</th><th>description</th></tr>
+{computers_rows}</table>
+
+<h2>Share inventory ({total_shares} shares on {len(share_inventories)} host{'s' if len(share_inventories) != 1 else ''})</h2>
+<table><tr><th>host</th><th>share</th><th>type</th><th>remark</th><th>special</th></tr>
+{shares_rows}</table>
 
 <h2>Credentials (AI-confirmed — click "show" to reveal)</h2>
 <table><tr><th>severity</th><th>username</th><th>secret</th><th>location</th><th>evidence</th></tr>
