@@ -192,6 +192,23 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                padding:14px; white-space:pre-wrap; font:13px/1.6 Consolas,monospace; }}
   footer {{ color:var(--dim); font-size:11px; margin-top:30px; border-top:1px solid var(--line);
            padding-top:10px; }}
+  .tabs {{ display:flex; flex-wrap:wrap; gap:4px; position:sticky; top:0; z-index:5;
+          background:var(--bg); padding:12px 0 8px; border-bottom:1px solid var(--line); }}
+  .tab {{ background:var(--panel); color:var(--dim); border:1px solid var(--line);
+         border-radius:6px; padding:6px 13px; cursor:pointer; font:inherit; font-size:13px; }}
+  .tab:hover {{ color:var(--fg); }}
+  .tab.active {{ color:#08121d; background:var(--acc); border-color:var(--acc); font-weight:600; }}
+  .tab .badge {{ background:#0d1117; border-radius:9px; font-size:10px; padding:1px 7px;
+                margin-left:5px; color:var(--fg); }}
+  .tab.active .badge {{ background:rgba(0,0,0,.28); color:#08121d; }}
+  .tab-panel {{ display:none; padding-top:14px; }}
+  .tab-panel.active {{ display:block; }}
+  .tab-panel h2 {{ margin-top:10px; }}
+  @media print {{
+    .tabs {{ display:none; }}
+    .tab-panel {{ display:block !important; page-break-before:always; }}
+    .tab-panel:first-of-type {{ page-break-before:auto; }}
+  }}
 </style></head><body><div class="wrap">
 <h1>smbenum — SMB enumeration report</h1>
 <div class="meta">
@@ -204,51 +221,81 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <span>redactions applied <b>{redactions}</b></span>
 </div>
 
-<div class="tiles">
-  {tile('domain computers', len(domain_computers))}
-  {tile('shares', total_shares)}
-  {tile('files scanned', stats.get('files_scanned', len(reads)))}
-  {tile('sweep hits', len(hits))}
-  {tile('flagged', len(flagged))}
-  {tile('AI findings', len(findings))}
-  {tile('credentials', len(cred_findings))}
-  {tile('tool calls', len(audit))}
+<nav class="tabs">
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="creds">Credentials<span class="badge">{len(cred_findings)}</span></button>
+  <button class="tab" data-tab="findings">Findings<span class="badge">{len(findings)}</span></button>
+  <button class="tab" data-tab="hits">Sweep hits<span class="badge">{len(hits)}</span></button>
+  <button class="tab" data-tab="computers">Computers<span class="badge">{len(domain_computers)}</span></button>
+  <button class="tab" data-tab="shares">Shares<span class="badge">{total_shares}</span></button>
+  <button class="tab" data-tab="smb">SMB activity<span class="badge">{len(reads) + len(flagged)}</span></button>
+  <button class="tab" data-tab="aireport">AI report</button>
+  <button class="tab" data-tab="audit">Audit<span class="badge">{len(audit)}</span></button>
+</nav>
+
+<div class="tab-panel active" id="overview">
+  <div class="tiles">
+    {tile('domain computers', len(domain_computers))}
+    {tile('shares', total_shares)}
+    {tile('files scanned', stats.get('files_scanned', len(reads)))}
+    {tile('sweep hits', len(hits))}
+    {tile('flagged', len(flagged))}
+    {tile('AI findings', len(findings))}
+    {tile('credentials', len(cred_findings))}
+    {tile('tool calls', len(audit))}
+  </div>
+  {extraction_note}
 </div>
-{extraction_note}
 
-<h2>Domain computers ({len(domain_computers)})</h2>
-<table><tr><th>name</th><th>dns name</th><th>operating system</th><th>role</th>
-<th>enabled</th><th>description</th></tr>
-{computers_rows}</table>
+<div class="tab-panel" id="creds">
+  <h2>Credentials (AI-confirmed — click "show" to reveal)</h2>
+  <table><tr><th>severity</th><th>username</th><th>secret</th><th>location</th><th>evidence</th></tr>
+  {creds_rows}</table>
+</div>
 
-<h2>Share inventory ({total_shares} shares on {len(share_inventories)} host{'s' if len(share_inventories) != 1 else ''})</h2>
-<table><tr><th>host</th><th>share</th><th>type</th><th>remark</th><th>special</th></tr>
-{shares_rows}</table>
+<div class="tab-panel" id="findings">
+  <h2>All findings</h2>
+  <table><tr><th>severity</th><th>category</th><th>location</th><th>note</th><th>evidence</th></tr>
+  {findings_rows}</table>
+</div>
 
-<h2>Credentials (AI-confirmed — click "show" to reveal)</h2>
-<table><tr><th>severity</th><th>username</th><th>secret</th><th>location</th><th>evidence</th></tr>
-{creds_rows}</table>
+<div class="tab-panel" id="hits">
+  <h2>Sweep hits (regex, secrets masked)</h2>
+  <table><tr><th>tier</th><th>path</th><th>line</th><th>pattern</th><th>snippet</th></tr>
+  {hits_rows}</table>
+</div>
 
-<h2>All findings</h2>
-<table><tr><th>severity</th><th>category</th><th>location</th><th>note</th><th>evidence</th></tr>
-{findings_rows}</table>
+<div class="tab-panel" id="computers">
+  <h2>Domain computers ({len(domain_computers)})</h2>
+  <table><tr><th>name</th><th>dns name</th><th>operating system</th><th>role</th>
+  <th>enabled</th><th>description</th></tr>
+  {computers_rows}</table>
+</div>
 
-<h2>Sweep hits (regex, secrets masked)</h2>
-<table><tr><th>tier</th><th>path</th><th>line</th><th>pattern</th><th>snippet</th></tr>
-{hits_rows}</table>
+<div class="tab-panel" id="shares">
+  <h2>Share inventory ({total_shares} shares on {len(share_inventories)} host{'s' if len(share_inventories) != 1 else ''})</h2>
+  <table><tr><th>host</th><th>share</th><th>type</th><th>remark</th><th>special</th></tr>
+  {shares_rows}</table>
+</div>
 
-<h2>SMB activity</h2>
-<p style="font-size:12px;color:var(--dim)">directories enumerated:</p>
-<p>{listings_html}</p>
-<table><tr><th>file read</th><th>range</th><th>verdict</th><th>duration</th></tr>{read_rows}</table>
-<h2>Flagged files (not read)</h2>
-<table><tr><th>path</th><th>size</th><th>reason</th></tr>{flagged_rows}</table>
+<div class="tab-panel" id="smb">
+  <h2>Files read ({len(reads)})</h2>
+  <table><tr><th>file read</th><th>range</th><th>verdict</th><th>duration</th></tr>{read_rows}</table>
+  <h2>Flagged files (not read, {len(flagged)})</h2>
+  <table><tr><th>path</th><th>size</th><th>reason</th></tr>{flagged_rows}</table>
+  <h2>Directories enumerated</h2>
+  <p>{listings_html}</p>
+</div>
 
-<h2>AI final report (verbatim)</h2>
-<pre class="report">{_esc(report_md) or '—'}</pre>
+<div class="tab-panel" id="aireport">
+  <h2>AI final report (verbatim)</h2>
+  <pre class="report">{_esc(report_md) or '—'}</pre>
+</div>
 
-<h2>Audit trail ({len(audit)} calls)</h2>
-<table><tr><th>tool</th><th>args</th><th>verdict</th><th>chars</th><th>ms</th></tr>{audit_rows}</table>
+<div class="tab-panel" id="audit">
+  <h2>Audit trail ({len(audit)} calls)</h2>
+  <table><tr><th>tool</th><th>args</th><th>verdict</th><th>chars</th><th>ms</th></tr>{audit_rows}</table>
+</div>
 
 <footer>Generated by smbenum. This artifact contains discovered credentials by
 design — store and share it like a loot file (it is already excluded from git).</footer>
@@ -259,6 +306,17 @@ function reveal(btn) {{
   if (btn.textContent === 'show') {{ s.textContent = real; btn.textContent = 'hide'; }}
   else {{ btn.textContent = 'show'; s.textContent = real[0] + '•'.repeat(Math.max(real.length - 1, 3)); }}
 }}
+function activate(id) {{
+  document.querySelectorAll('.tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === id));
+  document.querySelectorAll('.tab-panel').forEach(p =>
+    p.classList.toggle('active', p.id === id));
+  if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id);
+}}
+document.querySelectorAll('.tab').forEach(b =>
+  b.addEventListener('click', () => activate(b.dataset.tab)));
+const startTab = location.hash.replace('#', '');
+if (startTab && document.getElementById(startTab)) activate(startTab);
 </script>
 </div></body></html>"""
 

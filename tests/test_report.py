@@ -91,6 +91,9 @@ def test_report_html_contains_all_sections(tmp_path):
                    "ws01.corp.local", "dc01.corp.local", "Windows 11",
                    "IPC$", "docs"):
         assert marker in html, marker
+    # tabbed layout: nav + panels + hash deep-linking
+    assert html.count('class="tab-panel') == 9 and 'data-tab="creds"' in html
+    assert 'function activate(' in html and '@media print' in html
     # secret masked by default, real value only in the reveal attribute
     assert "Sup3rS3cret!" in html                     # present for the toggle...
     assert html.count("data-real='") == 1             # exactly one reveal attribute
