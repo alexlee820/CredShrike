@@ -202,12 +202,14 @@ REGISTRY: dict[str, Tool] = {t.name: t for t in [
                      "directories, triages files into red/yellow tiers, reads candidates "
                      "and regex-scans content; returns matches with the SECRET MASKED plus "
                      "coverage stats. Use this FIRST for 'find passwords/credentials' tasks. "
-                     "HITS ARE PAGED: a result carries at most ~50 matches; while "
-                     "'next_skip' is set, MORE HITS REMAIN — call again with the same "
-                     "share/path and skip_matches=next_skip until next_skip is null, and "
-                     "judge every hit (true/false positive via smb_read_file around it, "
-                     "exposure via smb_get_permissions). 'truncated' means the sweep itself "
-                     "was cut short (max_files/bytes) — narrower path or higher max_files."),
+                     "HITS ARE PAGED: while 'next_skip' is set, call again with "
+                     "skip_matches=next_skip until null so you see EVERY hit. "
+                     "data_files lists every CSV/TSV/JSON opened — regex CANNOT judge "
+                     "structured data (a 'user,pass' row has no keyword), so READ each "
+                     "data_files entry with smb_read_file and extract any credential "
+                     "pairs yourself. Judge every hit too (true/false positive via "
+                     "smb_read_file around it, exposure via smb_get_permissions). "
+                     "'truncated' means the sweep was cut short (max_files/bytes)."),
         schema=_obj({
             "host": {"type": "string"},
             "share": {"type": "string"},

@@ -52,9 +52,12 @@ SNAFFLER_PRESET = (
     "result has next_skip set, call smb_scan_share again with skip_matches="
     "next_skip until it is null, so you see EVERY hit. Then JUDGE each one — "
     "classify true/false positive (read around the hit with smb_read_file when "
-    "the snippet is ambiguous), check real exposure with smb_get_permissions "
-    "(probe=true) for files you confirm, and produce the final report. Use the "
-    "sweep's coverage stats as your scope evidence."
+    "the snippet is ambiguous). ALSO read every entry in the result's data_files "
+    "list (CSV/TSV/JSON) with smb_read_file — regex cannot see credential rows "
+    "in structured data, you must extract username/password pairs yourself. "
+    "Check real exposure with smb_get_permissions (probe=true) for files you "
+    "confirm, and produce the final report. Use the sweep's coverage stats as "
+    "your scope evidence."
 )
 
 

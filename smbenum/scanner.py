@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
-from .patterns import classify_file, compile_patterns
+from .patterns import classify_file, compile_patterns, is_data_file
 
 LOG = logging.getLogger(__name__)
 
@@ -52,6 +52,9 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
     stats = {"dirs_walked": 0, "files_seen": 0, "files_scanned": 0,
              "files_skipped_notier": 0, "bytes_scanned": 0, "scan_errors": 0}
     matches: list[dict] = []
+    # structured-data files (csv/tsv/json): regex can't judge their contents,
+    # so every one that was opened is listed here for the AI to READ itself
+    data_files: list[dict] = []
     truncated = False
     stop_reason = None
 
@@ -110,6 +113,9 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
             data = base64.b64decode(read.get("content_b64", ""))
             stats["files_scanned"] += 1
             stats["bytes_scanned"] += len(data)
+            if is_data_file(name):
+                data_files.append({"path": child, "tier": tier, "size": len(data),
+                                   "hits": 0})
             emit("scan", {"path": child, "tier": tier, "size": len(data)})
 
             text = data.decode("utf-8", errors="replace")
@@ -121,6 +127,8 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
                 emit("hit", {"path": child, "pattern": pattern_name})
             if hits:
                 emit("file_hit", {"path": child, "hits": len(hits), "tier": tier})
+                if data_files and data_files[-1]["path"] == child:
+                    data_files[-1]["hits"] = len(hits)
 
     total = len(matches)
     page = matches[skip_matches: skip_matches + max_matches_returned]
@@ -132,6 +140,9 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
         # paging handle for the model: while set, more hits remain — call
         # again with skip_matches = next_skip to get the next page
         "next_skip": (skip_matches + len(page)) if skip_matches + len(page) < total else None,
+        # structured-data files the AI must READ (regex cannot judge them):
+        # csv/tsv/json — full list of those opened this sweep, hit or not
+        "data_files": data_files,
         "truncated": truncated, "stop_reason": stop_reason,
         "stats": stats,
         "patterns_used": [p["name"] for p in compiled],

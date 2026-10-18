@@ -41,7 +41,15 @@ YELLOW_EXTS = {".config", ".xml", ".ini", ".cfg", ".conf", ".ps1", ".psm1", ".ba
                ".py", ".sh", ".hta", ".asp", ".aspx", ".php", ".jsp", ".reg",
                ".log"}
 
+# structured-data files: regex can't see their secrets (a 'user,pass' CSV row
+# has no keyword to match), so the sweep surfaces them for the AI to READ
+DATA_EXTS = {".csv", ".tsv", ".json"}
+
 TIERS = {"red": (RED_EXTS, RED_NAME_SUBSTRINGS), "yellow": (YELLOW_EXTS, ())}
+
+
+def is_data_file(name: str) -> bool:
+    return name.lower().endswith(tuple(DATA_EXTS))
 
 
 def classify_file(name: str, tiers=("red", "yellow")) -> str | None:

@@ -32,19 +32,22 @@ class FakeScanSMB:
 
 
 def _tree():
-    # entries: root(3) + Scripts(4) + Photos(2) = 9 entries (2 dirs, 7 files)
-    # red file: Photos/id_rsa_backup.key (.key)
-    # yellow files: deploy.ps1, backup.sql, readme.txt
-    # untiered: photo.png, helper.cs, pic1.jpg
+    # entries: root(3) + Scripts(6) + Photos(2) = 11 entries (2 dirs, 9 files)
+    # red: id_rsa_backup.key · yellow: deploy.ps1, backup.sql, readme.txt,
+    # users.csv, config.json · untiered: photo.png, helper.cs, pic1.jpg
     return FakeScanSMB(
         tree={"": ["Scripts", "Photos", "readme.txt"],
-              "Scripts": ["deploy.ps1", "photo.png", "backup.sql", "helper.cs"],
+              "Scripts": ["deploy.ps1", "photo.png", "backup.sql", "helper.cs",
+                          "users.csv", "config.json"],
               "Photos": ["pic1.jpg", "id_rsa_backup.key"]},
         contents={
             "Scripts/deploy.ps1": b"$u='svc-scan'\n$password = 'Sup3rS3cret!'\nWrite-Host done\n",
             "Scripts/backup.sql": b"-- dump\npwd=hunter2;\npassword=Tr0ub4dor;\n",
             "readme.txt": b"nothing interesting here\n",
             "Photos/id_rsa_backup.key": b"-----BEGIN RSA PRIVATE KEY-----\nabc\n",
+            # structured data: NO keyword matches, but the AI must read these
+            "Scripts/users.csv": b"username,password,role\nalex,P@ssw0rd,admin\nsvc,Sup3rS3cret!,svc\n",
+            "Scripts/config.json": b'{"db_user": "root", "db_pass": "toor123"}\n',
         })
 
 
@@ -95,7 +98,7 @@ def test_scan_respects_tiers_and_depth():
     opened = set(fake.read_calls)
     assert "Scripts/deploy.ps1" not in opened          # yellow not opened in red-only sweep
     assert opened == {"Photos/id_rsa_backup.key"}      # the only red-tier file
-    assert result["stats"]["files_skipped_notier"] == 6  # deselected-tier + untiered
+    assert result["stats"]["files_skipped_notier"] == 8  # deselected-tier + untiered
 
     fake2 = _tree()
     scan_share(fake2, "IT", depth=0)                   # depth 0: no subdirectories
@@ -110,8 +113,8 @@ def test_scan_caps_and_stats():
     # stats reflect the walk
     full = scan_share(_tree(), "IT")
     assert full["stats"]["dirs_walked"] == 3            # root + Scripts + Photos
-    assert full["stats"]["files_seen"] == 9             # all entries incl. dirs
-    assert full["stats"]["files_scanned"] == 4          # red + yellow files
+    assert full["stats"]["files_seen"] == 11            # all entries incl. dirs
+    assert full["stats"]["files_scanned"] == 6          # red + yellow + data files
     assert full["stats"]["bytes_scanned"] > 0
     assert not full["truncated"]
 
@@ -144,7 +147,7 @@ def test_scan_skips_dot_dotdot_pseudo_entries():
     assert all("/." not in p and "/.." not in p for p in walk_paths)
     assert not any(k == "walk_error" for k, _ in events)
     # counts unchanged by the pseudo entries (stats identical to before)
-    assert result["stats"]["files_seen"] == 9 and result["stats"]["dirs_walked"] == 3
+    assert result["stats"]["files_seen"] == 11 and result["stats"]["dirs_walked"] == 3
 
 
 def test_scan_match_paging():
@@ -157,3 +160,15 @@ def test_scan_match_paging():
     assert len(page2["matches"]) == 2 and page2["next_skip"] == 4
     page3 = scan_share(_tree(), "IT", max_matches_returned=2, skip_matches=4)
     assert len(page3["matches"]) == 1 and page3["next_skip"] is None
+
+
+def test_data_files_surfaced_even_without_regex_hits():
+    # users.csv / config.json carry credentials but NO regex keyword matches:
+    # they must appear in data_files so the AI reads them itself
+    result = scan_share(_tree(), "IT")
+    data_paths = {d["path"] for d in result["data_files"]}
+    assert data_paths == {"Scripts/users.csv", "Scripts/config.json"}
+    csv_entry = next(d for d in result["data_files"] if d["path"].endswith("users.csv"))
+    assert csv_entry["size"] > 0 and csv_entry["tier"] == "yellow"
+    # and their content produced no masked matches (proving regex blindness)
+    assert not any(m["path"].endswith((".csv", ".json")) for m in result["matches"])
