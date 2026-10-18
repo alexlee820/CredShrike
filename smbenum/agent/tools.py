@@ -110,6 +110,7 @@ def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
         tiers=tuple(args.get("tiers", ctx.policy.scan_tiers)),
         patterns=patterns,
         on_event=ctx.emit,
+        skip_matches=int(args.get("skip_matches", 0)),
     )
     # deterministic byte accounting toward the run budget
     ctx.budget.bytes_read += int(result["stats"]["bytes_scanned"])
@@ -200,11 +201,13 @@ REGISTRY: dict[str, Tool] = {t.name: t for t in [
         description=("Deterministic credential sweep of one share (snaffler-style). Walks "
                      "directories, triages files into red/yellow tiers, reads candidates "
                      "and regex-scans content; returns matches with the SECRET MASKED plus "
-                     "coverage stats. Use this FIRST for 'find passwords/credentials' tasks, "
-                     "then judge every match: classify true/false positive (read the file "
-                     "around the hit with smb_read_file if needed), check exposure with "
-                     "smb_get_permissions, and report using the coverage stats as evidence. "
-                     "Matches are capped; 'truncated' tells you the sweep was cut short."),
+                     "coverage stats. Use this FIRST for 'find passwords/credentials' tasks. "
+                     "HITS ARE PAGED: a result carries at most ~50 matches; while "
+                     "'next_skip' is set, MORE HITS REMAIN — call again with the same "
+                     "share/path and skip_matches=next_skip until next_skip is null, and "
+                     "judge every hit (true/false positive via smb_read_file around it, "
+                     "exposure via smb_get_permissions). 'truncated' means the sweep itself "
+                     "was cut short (max_files/bytes) — narrower path or higher max_files."),
         schema=_obj({
             "host": {"type": "string"},
             "share": {"type": "string"},
@@ -213,6 +216,9 @@ REGISTRY: dict[str, Tool] = {t.name: t for t in [
             "max_files": {"type": "integer", "minimum": 1},
             "tiers": {"type": "array", "items": {"enum": ["red", "yellow"]},
                       "description": "which triage tiers to open (default: both)"},
+            "skip_matches": {"type": "integer", "minimum": 0,
+                             "description": "paging: fetch hits after this index "
+                                            "(use next_skip from the previous result)"},
         }, ["host", "share"]),
         handler=_smb_scan_share,
     ),

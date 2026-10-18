@@ -48,7 +48,9 @@ def _build_session(args):
 
 SNAFFLER_PRESET = (
     "Run a credential sweep on the shares of the in-scope host(s): call "
-    "smb_scan_share first (deterministic regex sweep), then JUDGE every match — "
+    "smb_scan_share first (deterministic regex sweep). Hits are PAGED — while a "
+    "result has next_skip set, call smb_scan_share again with skip_matches="
+    "next_skip until it is null, so you see EVERY hit. Then JUDGE each one — "
     "classify true/false positive (read around the hit with smb_read_file when "
     "the snippet is ambiguous), check real exposure with smb_get_permissions "
     "(probe=true) for files you confirm, and produce the final report. Use the "

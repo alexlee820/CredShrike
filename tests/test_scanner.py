@@ -15,7 +15,8 @@ class FakeScanSMB:
         self.read_calls = []
 
     def list_dir(self, share, path="", max_entries=200):
-        entries = []
+        entries = [{"name": ".", "is_dir": True, "size": 0},
+                   {"name": "..", "is_dir": True, "size": 0}]   # real servers return these
         for name in self.tree.get(path, []):
             child = f"{path}/{name}" if path else name
             is_dir = child in self.tree
@@ -132,3 +133,27 @@ def test_custom_patterns_merge_and_override():
     result = scan_share(fake, "IT", patterns=patterns)
     assert any(m["pattern"] == "svc_account" and "svc-scan" in m["snippet"]
                for m in result["matches"])
+
+
+def test_scan_skips_dot_dotdot_pseudo_entries():
+    # FakeScanSMB now returns ./.. like a real server; the sweep must not
+    # descend into them (no 'a/./../..' paths, no walk errors)
+    events = []
+    result = scan_share(_tree(), "IT", on_event=lambda k, d: events.append((k, d)))
+    walk_paths = [d["path"] for k, d in events if k == "walk"]
+    assert all("/." not in p and "/.." not in p for p in walk_paths)
+    assert not any(k == "walk_error" for k, _ in events)
+    # counts unchanged by the pseudo entries (stats identical to before)
+    assert result["stats"]["files_seen"] == 9 and result["stats"]["dirs_walked"] == 3
+
+
+def test_scan_match_paging():
+    # the tree yields 5 hits (backup.sql's password= matches two patterns);
+    # page size 2 -> 2/2/1 across three pages, next_skip chained then null
+    page1 = scan_share(_tree(), "IT", max_matches_returned=2)
+    assert page1["matches_total"] == 5 and len(page1["matches"]) == 2
+    assert page1["matches_skip"] == 0 and page1["next_skip"] == 2
+    page2 = scan_share(_tree(), "IT", max_matches_returned=2, skip_matches=2)
+    assert len(page2["matches"]) == 2 and page2["next_skip"] == 4
+    page3 = scan_share(_tree(), "IT", max_matches_returned=2, skip_matches=4)
+    assert len(page3["matches"]) == 1 and page3["next_skip"] is None

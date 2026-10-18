@@ -18,7 +18,10 @@ from .patterns import classify_file, compile_patterns
 
 LOG = logging.getLogger(__name__)
 
-MAX_MATCHES_RETURNED = 200
+# paging: a page of hits must fit inside the executor's result_char_cap
+# (~50 masked snippets ≈ 7K chars); the sweep itself may collect far more
+MAX_MATCHES_RETURNED = 50     # hits per result page
+MAX_MATCHES_COLLECTED = 1000  # hard collection ceiling per sweep
 
 
 def mask_line(line: str, group_start: int, group_end: int, mask: str = "***") -> str:
@@ -33,12 +36,15 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
                max_files: int = 200, max_file_bytes: int = 65536,
                max_total_bytes: int = 5 * 1024 * 1024,
                tiers=("red", "yellow"), patterns: Optional[list] = None,
-               on_event: Optional[Callable] = None) -> dict:
+               on_event: Optional[Callable] = None,
+               skip_matches: int = 0, max_matches_returned: int = MAX_MATCHES_RETURNED) -> dict:
     """Sweep one share (rooted at ``path``) for credential patterns.
 
     ``session`` is an SMBSession (read-only). ``patterns`` comes from
     :func:`patterns.compile_patterns`. Returns a result dict with matches
-    (secret values masked) + coverage stats. Raises nothing for SMB errors
+    (secret values masked) + coverage stats; ``skip_matches`` pages through
+    the hit list when there are more than MAX_MATCHES_RETURNED (the result
+    carries ``next_skip`` while more remain). Raises nothing for SMB errors
     on individual files — they are recorded as scan_errors.
     """
     emit = on_event or (lambda kind, data: None)
@@ -67,8 +73,11 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
             continue
 
         for entry in listing.get("entries", []):
-            stats["files_seen"] += 1
             name = entry.get("name", "")
+            if name in (".", ".."):
+                continue  # pseudo-entries — descending into them produces
+                # paths like 'a/./../..' which the server rejects
+            stats["files_seen"] += 1
             child = f"{current}/{name}" if current else name
             if entry.get("is_dir"):
                 if level < depth:
@@ -86,7 +95,7 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
                 truncated, stop_reason = True, f"max_total_bytes={max_total_bytes} reached"
                 queue.clear()
                 break
-            if len(matches) >= MAX_MATCHES_RETURNED * 3:  # hard cap on collected hits
+            if len(matches) >= MAX_MATCHES_COLLECTED:  # hard cap on collected hits
                 truncated, stop_reason = True, "match cap reached"
                 queue.clear()
                 break
@@ -113,10 +122,16 @@ def scan_share(session, share: str, path: str = "", *, depth: int = 3,
             if hits:
                 emit("file_hit", {"path": child, "hits": len(hits), "tier": tier})
 
+    total = len(matches)
+    page = matches[skip_matches: skip_matches + max_matches_returned]
     result = {
         "share": share, "root": path or "", "tiers": list(tiers),
-        "matches": matches[:MAX_MATCHES_RETURNED],
-        "matches_total": len(matches),
+        "matches": page,
+        "matches_skip": skip_matches,
+        "matches_total": total,
+        # paging handle for the model: while set, more hits remain — call
+        # again with skip_matches = next_skip to get the next page
+        "next_skip": (skip_matches + len(page)) if skip_matches + len(page) < total else None,
         "truncated": truncated, "stop_reason": stop_reason,
         "stats": stats,
         "patterns_used": [p["name"] for p in compiled],

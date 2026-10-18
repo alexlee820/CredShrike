@@ -158,6 +158,8 @@ class SMBSession:
             if i >= max_entries:
                 return {"share": share, "path": _norm(path), "entries": entries,
                         "truncated": True, "total_seen": i}
+            if f.get_longname() in (".", ".."):
+                continue  # pseudo-entries — noise for the model, poison for paths
             attrs = f.get_attributes()
             is_dir = bool(attrs & FILE_ATTRIBUTE_DIRECTORY)
             entries.append({
