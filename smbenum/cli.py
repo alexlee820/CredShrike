@@ -197,6 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_domain_cli(subs)
     from .agent import register_cli as register_agent_cli
     register_agent_cli(subs)
+    from .webapp import register as register_ui
+    register_ui(subs)
 
     return parser
 

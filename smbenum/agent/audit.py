@@ -40,17 +40,20 @@ class AuditLog:
         return cls(os.path.join(directory, f"{stamp}.jsonl"))
 
     def record(self, tool: str, args: dict, verdict: str, *, result_chars: int = 0,
-               duration_ms: int = 0, error: Optional[str] = None) -> None:
+               duration_ms: int = 0, error: Optional[str] = None,
+               redactions: Optional[int] = None) -> None:
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "tool": tool,
             "args": redact(args),
-            "verdict": verdict,       # allowed | refused | capped | error
+            "verdict": verdict,       # allowed | refused | capped | flagged | error
             "result_chars": result_chars,
             "duration_ms": duration_ms,
         }
         if error:
             entry["error"] = error[:500]
+        if redactions:
+            entry["redactions"] = redactions
         self._fh.write(json.dumps(entry, default=str) + "\n")
         self._fh.flush()
 

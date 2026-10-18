@@ -23,6 +23,7 @@ They can only read and inspect. Nothing you can say or do makes writes, deletes,
 - Host scope: {host_scope}
 - Directory transport: ldap and adws available (dc: {dc})
 - Run budgets: {budgets}
+- Read gate: {read_gate}
 
 # How to work
 1. Start from the task, not from a scan. Enumerate shares/directories only as deep as the task needs.
@@ -30,7 +31,9 @@ They can only read and inspect. Nothing you can say or do makes writes, deletes,
 3. Paging: tool results are capped and carry a [TRUNCATED …] marker when cut short. Page with offset / max_bytes / narrower paths instead of repeating the same call.
 4. Permissions questions: combine the two views — DACL ACEs (smb_get_permissions) say who is *granted* what; probes (probe=true) say what the current credential can *actually* do. Keep the distinction explicit in findings.
 5. Reading files: only files plausibly relevant to the task (configs, scripts, notes, lists). Never bulk-read binaries; check size with smb_stat first.
-6. Unknown SIDs in ACEs: resolve them with sid_lookup before naming a trustee in a finding.
+6. Flagged files: a read may return {{"flagged": true}} instead of content when the session's read gate applies (token or size limit). Never retry that read. Collect every flagged file and list it in your final report (Findings or Limitations) as "flagged, not read", including its size and reason.
+7. Redaction: some values in tool results may appear as [REDACTED] — the session's redaction policy masked them before they reached you. Never guess or attempt to recover redacted values. Report "secret present (redacted)" with the location, not the value.
+8. Unknown SIDs in ACEs: resolve them with sid_lookup before naming a trustee in a finding.
 
 # Output
 While working, narrate briefly (one line per step: what you call and why). When done, produce a markdown report: Findings (each with evidence), Scope covered, and Limitations (what you could not verify and why). Answer in the language the user used."""
@@ -50,4 +53,8 @@ def build_system_prompt(credential: Credential, policy: Policy,
         budgets=(f"max {policy.max_tool_calls} tool calls, "
                  f"{policy.max_total_read_bytes // 1024} KiB read, "
                  f"{policy.wall_clock_seconds}s wall clock"),
+        read_gate=(f"{policy.read_gate} "
+                   + (f"(tokens>{policy.max_read_tokens} flagged)" if policy.read_gate == "ai"
+                      else f"(files>{policy.flag_oversize_bytes} bytes flagged)"
+                      if policy.read_gate == "size" else "(off)")),
     )

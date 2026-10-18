@@ -69,6 +69,32 @@ smbenum agent --profile policy.example.yaml --host filesrv01.corp.local --dc dc0
 goal> which files in the IT share can Everyone read? probe and summarize
 ```
 
+### Snaffler-style hybrid mode (deterministic sweep + AI judgment)
+
+```bash
+smbenum agent --profile policy.example.yaml --host filesrv01 --preset snaffler
+```
+
+The preset tells the agent to call `smb_scan_share` first: a deterministic
+walk of the share (red/yellow tier triage, depth/file/byte caps) with regex
+content scanning — secrets masked in snippets. The model's job is the
+judgment half: classify each hit true/false-positive, probe exposure with
+`smb_get_permissions`, and report using the sweep's coverage stats as
+evidence. Patterns: built-in set (`smbenum/patterns.py`) plus your own via
+`--scan-patterns file.yaml` ({name: regex-with-optional-group}).
+
+### Web UI (initialize runs, watch live, read reports)
+
+```bash
+smbenum ui            # opens http://127.0.0.1:8080 (local only)
+```
+
+Single-page console: form to configure auth/host/gate/redaction/model (or
+pick the snaffler preset), live feed of every tool call and sweep event
+(walk / scan / ★ HIT), budget bar, flagged files, follow-up goals against
+the same conversation, stop button, and the final report. The Flask server
+binds 127.0.0.1 only — the form holds real credentials.
+
 One-shot: add `--goal "..."`. Follow-ups keep the conversation; `/budget`
 shows remaining run budgets; `/quit` exits. Every tool call is echoed live
 and written to a JSONL audit log under `runs/`.

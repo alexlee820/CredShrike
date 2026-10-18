@@ -24,6 +24,33 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "allowed_hosts": [],                # empty = whatever the CLI passes explicitly
     "model": "claude-opus-5",
     "max_tokens": 16000,
+    # --- read gate: flag-but-don't-read modes for smb_read_file -----------
+    # "none": read whatever the model asks (within max_file_bytes)  [current]
+    # "ai":   model chooses freely, but a request whose ESTIMATED token count
+    #         exceeds max_read_tokens is not executed — returned as flagged
+    # "size": files larger than flag_oversize_bytes are never read; the
+    #         request returns flagged with the real size (from smb_stat)
+    "read_gate": "none",
+    "max_read_tokens": 8192,            # ai mode: estimated-token ceiling per read
+    "chars_per_token": 4.0,             # ai mode: estimation ratio (bytes/4 ≈ tokens)
+    "flag_oversize_bytes": 5 * 1024 * 1024,   # size mode: 5 MiB default
+    # --- redaction: scrub tool results BEFORE they reach the LLM -----------
+    "redact_literals": [],              # exact strings to mask (e.g. codenames, hostnames)
+    "redact_patterns": [],              # regexes; with a capture group only the group
+                                        # is masked: 'password\s*=\s*(\S+)' keeps the key
+    "redact_replacement": "[REDACTED]",
+    # --- snaffler-style scan tool (smb_scan_share) --------------------------
+    "scan_depth": 3,
+    "scan_max_files": 200,              # candidates opened per sweep
+    "scan_max_file_bytes": 65536,       # per file
+    "scan_tiers": ["red", "yellow"],
+    "scan_use_default_patterns": True,
+    "scan_extra_patterns": {},          # {name: regex}; same name replaces the built-in
+    # --- LLM endpoint (Anthropic-compatible providers: GLM, DeepSeek, ...) ---
+    "api_base_url": "",                 # empty = official Anthropic API
+    "api_key": "",                      # empty = ANTHROPIC_API_KEY env / auth profile
+    "thinking_mode": "adaptive",        # adaptive | off — off is safer on 3rd-party
+                                        # endpoints; auto-set when api_base_url is given
 }
 
 
@@ -38,6 +65,22 @@ class Policy:
     allowed_hosts: list[str] = field(default_factory=list)
     model: str = DEFAULT_POLICY_DICT["model"]
     max_tokens: int = DEFAULT_POLICY_DICT["max_tokens"]
+    read_gate: str = DEFAULT_POLICY_DICT["read_gate"]          # none | ai | size
+    max_read_tokens: int = DEFAULT_POLICY_DICT["max_read_tokens"]
+    chars_per_token: float = DEFAULT_POLICY_DICT["chars_per_token"]
+    flag_oversize_bytes: int = DEFAULT_POLICY_DICT["flag_oversize_bytes"]
+    redact_literals: list[str] = field(default_factory=list)
+    redact_patterns: list[str] = field(default_factory=list)
+    redact_replacement: str = DEFAULT_POLICY_DICT["redact_replacement"]
+    scan_depth: int = DEFAULT_POLICY_DICT["scan_depth"]
+    scan_max_files: int = DEFAULT_POLICY_DICT["scan_max_files"]
+    scan_max_file_bytes: int = DEFAULT_POLICY_DICT["scan_max_file_bytes"]
+    scan_tiers: list[str] = field(default_factory=lambda: list(DEFAULT_POLICY_DICT["scan_tiers"]))
+    scan_use_default_patterns: bool = DEFAULT_POLICY_DICT["scan_use_default_patterns"]
+    scan_extra_patterns: dict[str, str] = field(default_factory=dict)
+    api_base_url: str = DEFAULT_POLICY_DICT["api_base_url"]
+    api_key: str = DEFAULT_POLICY_DICT["api_key"]
+    thinking_mode: str = DEFAULT_POLICY_DICT["thinking_mode"]
 
     @classmethod
     def load(cls, path: Optional[str] = None, overrides: Optional[dict] = None) -> "Policy":

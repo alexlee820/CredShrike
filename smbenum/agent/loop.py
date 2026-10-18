@@ -42,6 +42,7 @@ class AgentLoop:
         self.messages: list[dict] = []
         self._budget_final_requested = False
         self._executor = None
+        self.stop_requested = False   # set by the UI/REPL to break the loop
 
     @property
     def executor(self):
@@ -56,6 +57,10 @@ class AgentLoop:
         Conversation state persists across calls (REPL follow-ups)."""
         self.messages.append({"role": "user", "content": goal})
         while True:
+            if self.stop_requested:
+                self.echo("[stopped] interrupted by user — returning partial state")
+                return ("(stopped by user — no final report was produced; see the "
+                        "live log and audit trail for what was collected)")
             response = self._create()
             self.messages.append({"role": "assistant", "content": response.content})
 
@@ -102,14 +107,18 @@ class AgentLoop:
         return results
 
     def _create(self):
-        return self.client.messages.create(
+        kwargs = dict(
             model=self.policy.model,
             max_tokens=self.policy.max_tokens,
-            thinking={"type": "adaptive"},
             system=self.system,
             tools=anthropic_tools(),
             messages=self.messages,
         )
+        # adaptive thinking is an Anthropic-API feature; third-party
+        # Anthropic-compatible endpoints (GLM/DeepSeek/...) may reject it
+        if self.policy.thinking_mode != "off":
+            kwargs["thinking"] = {"type": "adaptive"}
+        return self.client.messages.create(**kwargs)
 
 
 def _short(args: dict, limit: int = 100) -> str:

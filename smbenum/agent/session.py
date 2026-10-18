@@ -75,6 +75,31 @@ class AgentSession:
         self.budget = Budget(policy)
         self._smb_cache: dict[str, SMBSession] = {}
         self._dir_sources: dict[str, object] = {}
+        # files the read gate flagged instead of reading (harness-side record,
+        # independent of whatever the model says in its report)
+        self.flagged_files: list[dict] = []
+        # total redaction hits scrubbed from tool results before they reached
+        # the LLM (harness-side counter for /budget)
+        self.redactions_applied = 0
+        # optional progress hook for UIs/echo: emit(kind, data) — set by the
+        # web app so mid-sweep progress reaches the browser
+        self.event_hook = None
+
+    def emit(self, kind: str, data: dict) -> None:
+        if self.event_hook is not None:
+            try:
+                self.event_hook(kind, data)
+            except Exception:  # noqa: BLE001 - UI problems must never stop the agent
+                pass
+
+    def flag_file(self, host: str, share: str, path: str, reason: str,
+                  size_bytes: "int | None" = None) -> dict:
+        import time as _time
+        entry = {"host": host, "share": share, "path": path,
+                 "size_bytes": size_bytes, "reason": reason,
+                 "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())}
+        self.flagged_files.append(entry)
+        return entry
 
     # -- scope enforcement ------------------------------------------------- #
     def host_allowed(self, host: str) -> bool:

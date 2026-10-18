@@ -35,7 +35,9 @@ def _obj(properties: dict, required: list[str]) -> dict:
 # handlers (thin wrappers over the core library; caps applied by the executor)
 # --------------------------------------------------------------------------- #
 def _domain_list_computers(ctx: AgentSession, args: dict) -> Any:
-    source = ctx.directory(args.get("source", "auto"))
+    # model's per-call choice wins; otherwise the session-level config
+    # (CLI --source / web UI dropdown) is the default
+    source = ctx.directory(args.get("source") or ctx.domain_source or "auto")
     return {"source": source.name,
             "computers": [c.to_dict() for c in
                           source.list_computers(args.get("filter", "") or "")]}
@@ -80,6 +82,31 @@ def _sid_lookup(ctx: AgentSession, args: dict) -> Any:
     return {"names": resolver.resolve_many(sids)}
 
 
+def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
+    """Snaffler-style deterministic sweep: tier triage + regex content scan.
+    The model's job afterwards is judgment: classify each hit as true/false
+    positive and assess impact (permissions probes etc.)."""
+    from ..patterns import compile_patterns
+    from ..scanner import scan_share
+
+    session = ctx.smb(args["host"])
+    patterns = compile_patterns(extra=ctx.policy.scan_extra_patterns,
+                                use_defaults=ctx.policy.scan_use_default_patterns)
+    result = scan_share(
+        session, args["share"], args.get("path", "") or "",
+        depth=int(args.get("depth", ctx.policy.scan_depth)),
+        max_files=int(args.get("max_files", ctx.policy.scan_max_files)),
+        max_file_bytes=int(ctx.policy.scan_max_file_bytes),
+        max_total_bytes=ctx.policy.max_total_read_bytes,
+        tiers=tuple(args.get("tiers", ctx.policy.scan_tiers)),
+        patterns=patterns,
+        on_event=ctx.emit,
+    )
+    # deterministic byte accounting toward the run budget
+    ctx.budget.bytes_read += int(result["stats"]["bytes_scanned"])
+    return result
+
+
 # --------------------------------------------------------------------------- #
 REGISTRY: dict[str, Tool] = {t.name: t for t in [
     Tool(
@@ -88,7 +115,8 @@ REGISTRY: dict[str, Tool] = {t.name: t for t in [
                      "involves finding hosts (e.g. file servers) before touching SMB."),
         schema=_obj({
             "source": {"type": "string", "enum": ["auto", "ldap", "adws"],
-                       "description": "transport; auto=LDAP (default), adws=SOAP port 9389"},
+                       "description": "transport; omit to use the session default "
+                                      "(auto/ldap = LDAP 389, adws = WCF net.tcp 9389)"},
             "filter": {"type": "string",
                        "description": "extra LDAP filter ANDed with (objectClass=computer), "
                                       "e.g. '(operatingSystem=*Server*)'"},
@@ -156,6 +184,27 @@ REGISTRY: dict[str, Tool] = {t.name: t for t in [
         description="Resolve SIDs to principal names (well-known + directory).",
         schema=_obj({"sids": {"type": "array", "items": {"type": "string"}}}, ["sids"]),
         handler=_sid_lookup,
+    ),
+    Tool(
+        name="smb_scan_share",
+        description=("Deterministic credential sweep of one share (snaffler-style). Walks "
+                     "directories, triages files into red/yellow tiers, reads candidates "
+                     "and regex-scans content; returns matches with the SECRET MASKED plus "
+                     "coverage stats. Use this FIRST for 'find passwords/credentials' tasks, "
+                     "then judge every match: classify true/false positive (read the file "
+                     "around the hit with smb_read_file if needed), check exposure with "
+                     "smb_get_permissions, and report using the coverage stats as evidence. "
+                     "Matches are capped; 'truncated' tells you the sweep was cut short."),
+        schema=_obj({
+            "host": {"type": "string"},
+            "share": {"type": "string"},
+            "path": {"type": "string", "description": "start directory (default: share root)"},
+            "depth": {"type": "integer", "minimum": 1, "maximum": 6},
+            "max_files": {"type": "integer", "minimum": 1},
+            "tiers": {"type": "array", "items": {"enum": ["red", "yellow"]},
+                      "description": "which triage tiers to open (default: both)"},
+        }, ["host", "share"]),
+        handler=_smb_scan_share,
     ),
 ]}
 

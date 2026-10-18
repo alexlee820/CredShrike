@@ -20,6 +20,7 @@ registry lookup, no eval, no shell.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from typing import Any
@@ -52,6 +53,7 @@ class ToolExecutor:
         self.session = session
         self.policy = policy
         self.audit = audit
+        self._regex_cache: list | None = None
 
     # ------------------------------------------------------------------ #
     def execute(self, tool_name: str, raw_args: dict) -> dict:
@@ -68,9 +70,16 @@ class ToolExecutor:
                 self.audit.record(tool_name, raw_args, "error", error=f"{type(exc).__name__}: {exc}",
                                   duration_ms=timer.ms)
                 return {"content": f"ERROR: {type(exc).__name__}: {exc}", "is_error": True}
+        result, redactions = self._redact_result(result)
+        if redactions:
+            self.session.redactions_applied += redactions
         content, capped = self._render(result)
+        if redactions:
+            # appended AFTER truncation so the note always survives
+            content += f"\n[+{redactions} redaction(s) applied per session policy]"
         self.audit.record(tool_name, raw_args, verdict if not capped else "capped",
-                          result_chars=len(content), duration_ms=timer.ms)
+                          result_chars=len(content), duration_ms=timer.ms,
+                          redactions=redactions or None)
         return {"content": content, "is_error": False}
 
     # ------------------------------------------------------------------ #
@@ -113,6 +122,13 @@ class ToolExecutor:
             args["max_entries"] = max(1, want)
 
         self.session.budget.tool_calls += 1
+
+        # read gate: flag-but-don't-read for smb_read_file
+        if tool_name == "smb_read_file":
+            gate = self._read_gate(args)
+            if gate is not None:
+                return gate, "flagged"
+
         result = tool.handler(self.session, args)
 
         # count bytes toward the budget for reads
@@ -120,6 +136,112 @@ class ToolExecutor:
             self.session.budget.bytes_read += int(result.get("size", 0))
 
         return result, "capped" if capped else "allowed"
+
+    # ------------------------------------------------------------------ #
+    def _read_gate(self, args: dict):
+        """Read-gate check for smb_read_file (policy.read_gate).
+
+        Returns a flagged tool-result dict when the read must NOT execute,
+        or None to proceed with the read. Two modes:
+
+        - ``ai``: the model picked the file; the gate only fires when the
+          REQUESTED byte range's estimated token count exceeds
+          ``max_read_tokens`` (estimate = bytes / chars_per_token).
+        - ``size``: the file's actual size (via smb_stat) is compared to
+          ``flag_oversize_bytes``; oversized files are never read.
+        """
+        gate = self.policy.read_gate
+        if gate not in ("ai", "size"):
+            return None
+        host, share, path = str(args["host"]), str(args["share"]), str(args["path"])
+
+        if gate == "ai":
+            requested = int(args.get("max_bytes", 65536))
+            estimated = int(requested / max(self.policy.chars_per_token, 0.1))
+            if estimated <= self.policy.max_read_tokens:
+                return None
+            entry = self.session.flag_file(
+                host, share, path,
+                reason=(f"token gate: ~{estimated} estimated tokens for "
+                        f"{requested} requested bytes exceeds max_read_tokens="
+                        f"{self.policy.max_read_tokens}"))
+            entry["requested_bytes"] = requested
+            entry["estimated_tokens"] = estimated
+        else:  # size
+            stat = self.session.smb(host).stat(share, path)
+            size = int(stat.get("size", 0))
+            if size <= self.policy.flag_oversize_bytes:
+                return None
+            entry = self.session.flag_file(
+                host, share, path, size_bytes=size,
+                reason=(f"size gate: {size} bytes exceeds flag_oversize_bytes="
+                        f"{self.policy.flag_oversize_bytes}"))
+
+        # the tool result the model sees instead of content
+        entry["flagged"] = True
+        entry["instruction"] = ("This file was NOT read (gate policy). Do not retry "
+                                "the read. Record it in your final report as a "
+                                "flagged-not-read file, including size if known.")
+        return entry
+
+    # ------------------------------------------------------------------ #
+    # redaction: scrub tool results BEFORE they reach the LLM
+    # ------------------------------------------------------------------ #
+    def _compiled_patterns(self) -> list:
+        if self._regex_cache is None:
+            self._regex_cache = [re.compile(p) for p in self.policy.redact_patterns]
+        return self._regex_cache
+
+    def _redact_text(self, text: str) -> tuple[str, int]:
+        """Apply literal + regex redaction rules; returns (text, hits)."""
+        count = 0
+        replacement = self.policy.redact_replacement
+        for literal in self.policy.redact_literals:
+            if literal and literal in text:
+                count += text.count(literal)
+                text = text.replace(literal, replacement)
+        for rx in self._compiled_patterns():
+            def _sub(match, _rep=replacement):
+                nonlocal count
+                count += 1
+                if match.groups():
+                    # group-aware: keep context (e.g. 'password='), mask the value
+                    return match.group(0).replace(match.group(1), _rep)
+                return _rep
+            text = rx.sub(_sub, text)
+        return text, count
+
+    def _redact_result(self, obj: Any) -> tuple[Any, int]:
+        """Recursively scrub every string in a tool result. File contents
+        travel base64-encoded, so ``content_b64`` fields are decoded,
+        scrubbed, and re-encoded — plaintext rules still apply to them."""
+        if isinstance(obj, dict):
+            out, count = {}, 0
+            for key, value in obj.items():
+                if key == "content_b64" and isinstance(value, str):
+                    try:
+                        decoded = base64.b64decode(value).decode("utf-8", errors="replace")
+                        scrubbed, hits = self._redact_text(decoded)
+                        if hits:
+                            out[key] = base64.b64encode(scrubbed.encode("utf-8")).decode("ascii")
+                            count += hits
+                            continue
+                    except Exception:  # noqa: BLE001 - not b64/text: leave as-is
+                        pass
+                new_value, hits = self._redact_result(value)
+                out[key] = new_value
+                count += hits
+            return out, count
+        if isinstance(obj, list):
+            out, count = [], 0
+            for value in obj:
+                new_value, hits = self._redact_result(value)
+                out.append(new_value)
+                count += hits
+            return out, count
+        if isinstance(obj, str):
+            return self._redact_text(obj)
+        return obj, 0
 
     # ------------------------------------------------------------------ #
     def _render(self, result: Any) -> tuple[str, bool]:

@@ -10,6 +10,7 @@ venv/
 
 # Operational artifacts — never commit run evidence or tickets
 runs/
+runs_test/
 *.ccache
 *.kirbi
 *.keytab

@@ -21,6 +21,7 @@ from smbenum.credentials import Credential
 class FakeSMB:
     def __init__(self):
         self.reads = []
+        self.file_contents = {}   # path -> bytes; default b"ABC"
 
     def list_shares(self):
         return [{"name": "IT", "remark": "docs", "type": 0, "type_name": "DISK", "special": False}]
@@ -31,12 +32,15 @@ class FakeSMB:
                 "truncated": False, "total_seen": max_entries}
 
     def read_file(self, share, path, offset=0, max_bytes=65536):
+        import base64 as _b64
         self.reads.append((share, path, offset, max_bytes))
+        content = self.file_contents.get(path, b"ABC")
         return {"share": share, "path": path, "offset": offset, "size": max_bytes,
-                "truncated": False, "content_b64": "QUJD"}
+                "truncated": False, "content_b64": _b64.b64encode(content).decode()}
 
     def stat(self, share, path):
-        return {"share": share, "path": path, "name": path, "is_dir": False, "size": 10}
+        size = 10 * 1024 * 1024 if path == "huge.log" else 10   # huge.log = 10 MiB
+        return {"share": share, "path": path, "name": path, "is_dir": False, "size": size}
 
     def get_security(self, share, path):
         return {"owner": "S-1-5-32-544", "group": "S-1-5-32-545",
@@ -134,7 +138,8 @@ def test_audit_redacts_sensitive_keys():
 def test_registry_is_read_only_surface():
     names = set(REGISTRY)
     assert names == {"domain_list_computers", "smb_list_shares", "smb_list_dir",
-                     "smb_read_file", "smb_stat", "smb_get_permissions", "sid_lookup"}
+                     "smb_read_file", "smb_stat", "smb_get_permissions", "sid_lookup",
+                     "smb_scan_share"}
     specs = anthropic_tools()
     assert all(spec["input_schema"]["additionalProperties"] is False for spec in specs)
     assert all(spec["strict"] is True for spec in specs)
@@ -243,3 +248,167 @@ def test_budget_exhaustion_forces_final_summary(session):
     # second call was refused, not executed
     verdicts = [json.loads(line)["verdict"] for line in open(session.audit.path)]
     assert verdicts.count("refused") == 1
+
+
+# --------------------------------------------------------------------------- #
+# read gate: flag-but-don't-read modes
+# --------------------------------------------------------------------------- #
+def test_read_gate_ai_flags_token_heavy_request(session):
+    session.policy.read_gate = "ai"
+    session.policy.max_read_tokens = 1024        # 4 bytes/token -> >4096 bytes flagged
+    reads_before = len(session.smb("x").reads)
+
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "big.log",
+        "max_bytes": 100000})
+    assert not out["is_error"]
+    assert '"flagged": true' in out["content"]
+    assert "token gate" in out["content"] and "instruction" in out["content"]
+    # nothing was actually read
+    assert len(session.smb("x").reads) == reads_before
+    # harness-side record kept
+    assert len(session.flagged_files) == 1
+    assert session.flagged_files[0]["estimated_tokens"] == 25000  # 100000/4
+    # audit verdict is 'flagged'
+    verdict = json.loads(open(session.audit.path).readlines()[-1])["verdict"]
+    assert verdict == "flagged"
+    # gated call still consumes a tool-call (prevents retry hammering)
+    assert session.budget.tool_calls == 1
+
+
+def test_read_gate_ai_allows_small_request(session):
+    session.policy.read_gate = "ai"
+    session.policy.max_read_tokens = 2048        # allows up to 8192 bytes
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "small.txt",
+        "max_bytes": 4096})
+    assert not out["is_error"] and "flagged" not in out["content"]
+    assert len(session.smb("x").reads) == 1
+    assert session.flagged_files == []
+
+
+def test_read_gate_size_flags_oversized_file(session):
+    session.policy.read_gate = "size"
+    session.policy.flag_oversize_bytes = 1024 * 1024   # 1 MiB
+    reads_before = len(session.smb("x").reads)
+
+    # huge.log is 10 MiB per FakeSMB.stat -> flagged, not read
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "huge.log",
+        "max_bytes": 4096})
+    assert not out["is_error"]
+    assert '"flagged": true' in out["content"] and "size gate" in out["content"]
+    assert '"size_bytes": 10485760' in out["content"]
+    assert len(session.smb("x").reads) == reads_before
+    assert session.flagged_files[0]["size_bytes"] == 10485760
+
+    # small file passes the gate and is actually read
+    out2 = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "notes.txt",
+        "max_bytes": 4096})
+    assert "flagged" not in out2["content"]
+    assert len(session.smb("x").reads) == reads_before + 1
+
+
+def test_read_gate_none_by_default(session):
+    # default policy: no gate, big request still executes (clamped by cap)
+    session.policy.max_file_bytes = 1024
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "huge.log",
+        "max_bytes": 10_000_000})
+    assert "flagged" not in out["content"]
+    assert session.smb("x").reads[-1][3] == 1024   # clamped, but READ
+
+
+# --------------------------------------------------------------------------- #
+# redaction: scrub tool results BEFORE they reach the LLM
+# --------------------------------------------------------------------------- #
+import base64 as _b64mod
+
+
+def _decode_b64_in(content: str) -> str:
+    """Pull the content_b64 value out of a rendered tool result and decode it."""
+    import json as _json
+    obj = _json.loads(content.split("\n[+")[0])
+    return _b64mod.b64decode(obj["content_b64"]).decode("utf-8")
+
+
+def test_redact_literal_masks_plain_fields(session):
+    session.policy.redact_literals = ["filesrv01.corp.local"]
+    out = _executor(session).execute("smb_list_shares", {"host": "filesrv01.corp.local"})
+    assert "filesrv01.corp.local" not in out["content"]
+    assert "[REDACTED]" in out["content"]
+    assert "[+1 redaction(s) applied" in out["content"]
+
+
+def test_redact_pattern_with_group_keeps_context(session):
+    session.policy.redact_patterns = [r"password\s*=\s*(\S+)"]
+    session.smb("x").file_contents["creds.txt"] = b"$u='svc'; password=hunter2; go"
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "creds.txt",
+        "max_bytes": 4096})
+    decoded = _decode_b64_in(out["content"])
+    assert "password=[REDACTED]" in decoded          # key kept, value masked
+    assert "hunter2" not in decoded and "hunter2" not in out["content"]
+    assert "$u='svc'" in decoded                     # rest of content untouched
+
+
+def test_redact_applies_inside_base64_file_content(session):
+    # file contents travel base64 — the scrubber must decode/re-encode
+    session.policy.redact_literals = ["Azrael-Key-77"]
+    session.smb("x").file_contents["note.txt"] = b"token: Azrael-Key-77 end"
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "note.txt",
+        "max_bytes": 1024})
+    assert "Azrael-Key-77" not in out["content"]     # not even in b64 form
+    assert _decode_b64_in(out["content"]) == "token: [REDACTED] end"
+
+
+def test_redaction_counted_in_audit_and_session(session):
+    session.policy.redact_literals = ["hunter2"]
+    session.smb("x").file_contents["c.txt"] = b"a hunter2 b hunter2"
+    _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "c.txt", "max_bytes": 512})
+    last = json.loads(open(session.audit.path).readlines()[-1])
+    assert last["redactions"] == 2
+    assert session.redactions_applied == 2
+
+
+def test_no_redact_rules_is_noop(session):
+    session.smb("x").file_contents["c.txt"] = b"password=hunter2"
+    out = _executor(session).execute("smb_read_file", {
+        "host": "filesrv01.corp.local", "share": "IT", "path": "c.txt", "max_bytes": 512})
+    assert "hunter2" not in out["content"]           # it's base64, still not plaintext
+    assert _decode_b64_in(out["content"]) == "password=hunter2"
+    assert session.redactions_applied == 0
+    assert "redactions" not in json.loads(open(session.audit.path).readlines()[-1])
+
+
+# --------------------------------------------------------------------------- #
+# domain source selection (session default vs per-call override)
+# --------------------------------------------------------------------------- #
+def test_domain_source_session_default_and_override(session):
+    from smbenum.domain.base import ComputerRecord
+    captured = {}
+
+    class FakeSource:
+        name = "fake"
+
+        def list_computers(self, filter_ext="", attrs=None):
+            return [ComputerRecord(cn="WS01")]
+
+    def fake_directory(source="auto"):
+        captured["source"] = source
+        return FakeSource()
+
+    session.directory = fake_directory
+
+    from smbenum.agent.tools import REGISTRY
+    tool = REGISTRY["domain_list_computers"]
+    # no per-call source -> session default (e.g. adws chosen in UI/CLI)
+    session.domain_source = "adws"
+    out = tool.handler(session, {})
+    assert captured["source"] == "adws" and out["source"] == "fake"
+    # per-call choice wins over the session default
+    tool.handler(session, {"source": "ldap"})
+    assert captured["source"] == "ldap"
