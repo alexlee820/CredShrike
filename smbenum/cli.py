@@ -204,6 +204,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    # Windows consoles default to a legacy codepage (cp1252/cp950) that cannot
+    # encode the echo glyphs (→ ← ⋮ ★) — force UTF-8 with replacement so a
+    # console's encoding never crashes a run
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 - non-standard streams
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

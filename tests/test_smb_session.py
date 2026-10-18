@@ -15,6 +15,8 @@ from test_sd_parser import build_sd, _ace, OWNER, ADMINS
 # fakes
 # --------------------------------------------------------------------------- #
 class FakeSharedFile:
+    """Mirrors impacket.smb.SharedFile's real accessor names."""
+
     def __init__(self, name, size=0, is_dir=False):
         self._name, self._size = name, size
         self._attrs = 0x10 if is_dir else 0x20  # FILE_ATTRIBUTE_DIRECTORY / ARCHIVE
@@ -27,13 +29,14 @@ class FakeSharedFile:
     def get_filesize(self):
         return self._size
 
-    def get_fileattributes(self):
+    def get_attributes(self):
         return self._attrs
 
-    def get_ctime(self):
+    def get_ctime_epoch(self):
         return 1700000000
 
-    get_atime = get_wtime = get_mtime = get_ctime
+    get_atime_epoch = get_ctime_epoch
+    get_mtime_epoch = get_ctime_epoch
 
 
 class FakeServer:

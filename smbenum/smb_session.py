@@ -136,12 +136,11 @@ class SMBSession:
         """Shares with remarks, types and (via level-502) raw share ACLs."""
         out = []
         for entry in self.conn.listShares():
-            flags = entry["shi1_type"]  # noqa: F841 - kept raw below
             raw_type = int(entry["shi1_type"]["Data"]) if hasattr(entry["shi1_type"], "get") \
                 else int(entry["shi1_type"])
             out.append({
-                "name": str(entry["shi1_netname"]),
-                "remark": str(entry["shi1_remark"]) if entry["shi1_remark"] else "",
+                "name": str(entry["shi1_netname"]).rstrip("\x00"),
+                "remark": str(entry["shi1_remark"] or "").rstrip("\x00"),
                 "type": raw_type & 0x0FFFFFFF,
                 "type_name": SHARE_TYPE_NAMES.get(raw_type & 0x0FFFFFFF,
                                                   hex(raw_type & 0x0FFFFFFF)),
@@ -159,14 +158,15 @@ class SMBSession:
             if i >= max_entries:
                 return {"share": share, "path": _norm(path), "entries": entries,
                         "truncated": True, "total_seen": i}
-            is_dir = bool(f.get_fileattributes() & FILE_ATTRIBUTE_DIRECTORY)
+            attrs = f.get_attributes()
+            is_dir = bool(attrs & FILE_ATTRIBUTE_DIRECTORY)
             entries.append({
-                "name": f.get_longname(),
+                "name": f.get_longname().rstrip("\x00"),
                 "is_dir": is_dir,
                 "size": f.get_filesize(),
-                "attributes": hex(f.get_fileattributes()),
-                "created": _iso(f.get_ctime()), "accessed": _iso(f.get_atime()),
-                "written": _iso(f.get_mtime()), "changed": _iso(f.get_mtime()),
+                "attributes": hex(attrs),
+                "created": _iso(f.get_ctime_epoch()), "accessed": _iso(f.get_atime_epoch()),
+                "written": _iso(f.get_mtime_epoch()),
             })
         return {"share": share, "path": _norm(path), "entries": entries,
                 "truncated": False, "total_seen": len(entries)}
@@ -210,13 +210,13 @@ class SMBSession:
         if not matches:
             raise FileNotFoundError(f"not found: {share}/{path}")
         f = matches[0]
-        is_dir = bool(f.get_fileattributes() & FILE_ATTRIBUTE_DIRECTORY)
+        attrs = f.get_attributes()
         return {
-            "share": share, "path": _norm(path), "name": f.get_longname(),
-            "is_dir": is_dir, "size": f.get_filesize(),
-            "attributes": hex(f.get_fileattributes()),
-            "created": _iso(f.get_ctime()), "accessed": _iso(f.get_atime()),
-            "written": _iso(f.get_mtime()),
+            "share": share, "path": _norm(path), "name": f.get_longname().rstrip("\x00"),
+            "is_dir": bool(attrs & FILE_ATTRIBUTE_DIRECTORY), "size": f.get_filesize(),
+            "attributes": hex(attrs),
+            "created": _iso(f.get_ctime_epoch()), "accessed": _iso(f.get_atime_epoch()),
+            "written": _iso(f.get_mtime_epoch()),
         }
 
     # -- permissions ------------------------------------------------------- #
@@ -227,26 +227,38 @@ class SMBSession:
         return self.resolver.annotate(parsed)
 
     def get_share_security(self, share: str) -> dict:
-        """Share-level ACL: NetrShareGetInfo level 502 (DACL + share perms)."""
-        dce = self._dce(r"\srvsvc", srvs.MSRPC_UUID_SRVS, "srvsvc")
-        req = srvs.NetrShareGetInfo()
-        req["ServerName"] = "\\\\%s" % self.conn.getRemoteHost()
-        req["NetName"] = share
-        req["Level"] = 502
-        resp = dce.request(req)
-        info = resp["InfoStruct"]["ShareInfo502"]
-        result = {
-            "share": share,
-            "path": str(info["shi502_path"]) if info["shi502_path"] else "",
-            "remark": str(info["shi502_remark"]) if info["shi502_remark"] else "",
-            "share_permissions": decode_share_permissions(int(info["shi502_permissions"])),
-        }
-        sd_raw = info["shi502_security_descriptor"]
-        if sd_raw:
-            try:
-                result["sd"] = self.resolver.annotate(parse_security_descriptor(bytes(sd_raw)))
-            except SDParseError as exc:
-                result["sd_error"] = str(exc)
+        """Share-level permissions. Best source is NetrShareGetInfo level 502
+        (share permission bits + the share's own security descriptor); many
+        servers restrict that RPC to admins, so we fall back to the filesystem
+        security descriptor of the share ROOT directory — the DACL that
+        actually governs the shared folder."""
+        result: dict = {"share": share}
+        try:
+            dce = self._dce(r"\srvsvc", srvs.MSRPC_UUID_SRVS, "srvsvc")
+            resp = srvs.hNetrShareGetInfo(dce, share, 502)
+            info = resp["InfoStruct"]["ShareInfo502"]
+            result["path"] = str(info["shi502_path"] or "").rstrip("\x00")
+            result["remark"] = str(info["shi502_remark"] or "").rstrip("\x00")
+            result["share_permissions"] = decode_share_permissions(int(info["shi502_permissions"]))
+            sd_raw = bytes(info["shi502_security_descriptor"] or b"")
+            if sd_raw:
+                try:
+                    result["sd"] = self.resolver.annotate(parse_security_descriptor(sd_raw))
+                    result["sd_source"] = "netrsharegetinfo-502"
+                except SDParseError as exc:
+                    result["sd_error"] = str(exc)
+            return result
+        except Exception as exc:  # noqa: BLE001 - fall back to filesystem root SD
+            LOG.debug("NetrShareGetInfo(502) failed for %s: %s", share, exc)
+            result["share_permissions_error"] = (
+                f"unavailable via srvsvc ({type(exc).__name__}) — server restricts it")
+
+        try:
+            raw = self._query_file_sd(share, "")
+            result["sd"] = self.resolver.annotate(parse_security_descriptor(raw))
+            result["sd_source"] = "filesystem-root"
+        except Exception as exc:  # noqa: BLE001
+            result["sd_error"] = f"{type(exc).__name__}: {exc}"
         return result
 
     def effective_access(self, share: str, path: str) -> dict:
