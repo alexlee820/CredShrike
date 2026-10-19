@@ -283,7 +283,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <button class="tab" data-tab="smb">SMB activity<span class="badge">{len(reads) + len(flagged)}</span></button>
   <button class="tab" data-tab="aireport">AI report</button>
   <button class="tab" data-tab="transcript">Transcript<span class="badge">{ai_turns}</span></button>
-  {"<button class='tab' data-tab='debug'>Debug<span class='badge'>" + str(len(debug_results)) + "</span></button>" if debug_results else ""}
+  {"<button class=\"tab\" data-tab=\"debug\">Debug<span class=\"badge\">" + str(len(debug_results)) + "</span></button>" if debug_results else ""}
   <button class="tab" data-tab="audit">Audit<span class="badge">{len(audit)}</span></button>
 </nav>
 
