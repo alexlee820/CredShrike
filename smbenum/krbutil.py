@@ -225,13 +225,40 @@ def extract_for_spn(ccache: CCache, domain: str = "", username: str = "", spn: s
 # KDC discovery
 # --------------------------------------------------------------------------- #
 def discover_kdc(domain: str) -> str:
-    """Resolve a KDC hostname via the standard ``_ldap._tcp.dc._msdcs``
-    SRV record. Returns the first target; raises if DNS has no answer."""
+    """Resolve a KDC hostname via SRV records — Kerberos-specific first,
+    then the DC locator record. Returns the first target with a port."""
     import dns.resolver
 
-    answer = dns.resolver.resolve(f"_ldap._tcp.dc._msdcs.{domain}", "SRV")
-    for rr in answer:
+    for srv in (f"_kerberos._tcp.{domain}",
+                f"_kerberos._tcp.dc._msdcs.{domain}",
+                f"_ldap._tcp.dc._msdcs.{domain}"):
+        try:
+            answer = dns.resolver.resolve(srv, "SRV")
+        except Exception:  # noqa: BLE001 - NXDOMAIN / timeout -> try next
+            continue
+        rr = sorted(answer, key=lambda r: (r.priority, r.weight))[0]
         target = str(rr.target).rstrip(".")
         if target:
+            if rr.port != 88:
+                return f"{target}:{rr.port}"
             return target
-    raise ValueError(f"no SRV record found for domain {domain}")
+    raise ValueError(f"no Kerberos SRV records found for domain {domain}")
+
+
+def ensure_kdc(credential) -> None:
+    """Kerberos-family auth needs an explicit KDC when the domain's A record
+    is not the DC (VPNs/cgnat answer bogus records; impacket would connect
+    to it and die with 'unpack requires a buffer of 4 bytes'). Fill kdc_host
+    from SRV when possible, otherwise fail EARLY with actionable guidance."""
+    if not credential.is_kerberos or credential.kdc_host:
+        return
+    try:
+        credential.kdc_host = discover_kdc(credential.domain)
+        return
+    except Exception:  # noqa: BLE001 - no SRV: require explicit --kdc
+        pass
+    raise ValueError(
+        f"Kerberos auth for domain '{credential.domain}' has no --kdc and DNS "
+        f"has no Kerberos SRV records; the domain's A record may not be a KDC "
+        f"(impacket would fail with a cryptic recv error). Pass --kdc "
+        f"<dc-hostname> (e.g. --kdc DC01.{credential.domain}).")

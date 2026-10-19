@@ -64,6 +64,8 @@ def _ticket_ccache_path(credential: Credential) -> str:
 def login_smb(conn: SMBConnection, credential: Credential, spn_host: Optional[str] = None) -> None:
     """Authenticate an SMBConnection according to the credential type."""
     credential.validate()
+    from .krbutil import ensure_kdc
+    ensure_kdc(credential)   # early, actionable error instead of impacket recv-crash
     user, domain = credential.username, credential.domain
     if credential.auth_type is AuthType.PASSWORD:
         conn.login(user, credential.password, domain)

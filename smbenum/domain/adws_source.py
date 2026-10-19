@@ -75,6 +75,9 @@ class AdwsSource:
             return self
         cred = self.credential
         cred.validate()
+        if cred.is_kerberos:
+            from ..krbutil import ensure_kdc
+            ensure_kdc(cred)
         try:
             if cred.auth_type in (AuthType.PASSWORD, AuthType.NTLM):
                 # vendored NTLMAuth takes the BARE NT hash (its .nt feeds NNS)

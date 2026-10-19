@@ -83,6 +83,9 @@ class LdapSource:
         # include the port in the URL (default ports only; custom port would
         # need a manual socket via LDAPConnection(dstIp))
         url = f"{scheme}://{self.dc}"
+        if self.credential.is_kerberos:
+            from ..krbutil import ensure_kdc
+            ensure_kdc(self.credential)
         conn = ldap_impacket.LDAPConnection(url, "")
         cred = self.credential
         cred.validate()
