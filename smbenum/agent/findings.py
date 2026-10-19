@@ -16,7 +16,7 @@ from typing import Optional
 FINDINGS_SCHEMA_HINT = """{
   "findings": [
     {"severity": "high|medium|low",
-     "category": "credential|weak_acl|sensitive_file|other",
+     "category": "credential|pii|financial|network_info|weak_acl|sensitive_file|other",
      "host": "string", "share": "string", "path": "string",
      "username": "string or null",
      "secret": "string or null",
@@ -35,8 +35,12 @@ EXTRACTION_PROMPT = (
     "- Only findings backed by a tool result you saw; cite the tool call in evidence.\n"
     "- For credentials include BOTH username and secret (password/key) when present "
     "in what was read; copy values verbatim.\n"
-    "- severity: high = exploitable credential/world-writable secret, "
-    "medium = weak ACL on sensitive data, low = informational.\n"
+    "- Categories: credential (user/pass/key/token), pii (names/emails/IDs/"
+    "HR/health), financial (bank cards/invoices/budgets/payroll), "
+    "network_info (IPs/hostnames/diagrams/VPN/DNS/inventory), "
+    "sensitive_file, other.\n"
+    "- severity: high = exploitable credential, "
+    "medium = PII/financial/internal-network exposure, low = informational.\n"
     "- If nothing was found, return {\"findings\": []}.\n"
     "Respond with ONLY the JSON object matching exactly this shape, no prose, "
     "no markdown fence:\n" + FINDINGS_SCHEMA_HINT)
@@ -49,7 +53,8 @@ _SEV_ORDER = {"high": 3, "medium": 2, "low": 1}
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 VALID_SEVERITIES = {"high", "medium", "low"}
-VALID_CATEGORIES = {"credential", "weak_acl", "sensitive_file", "other"}
+VALID_CATEGORIES = {"credential", "pii", "financial", "network_info",
+                     "weak_acl", "sensitive_file", "other"}
 
 
 def _parse_findings_json(text: str) -> dict:

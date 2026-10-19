@@ -38,12 +38,20 @@ _DEFAULT_GOAL_CHAR_BUDGET = 400_000
 _HOST_ANALYSIS_PROMPT = (
     "Below is the COMPLETE deterministic content dump of every file on host "
     "{host} — gathered code-side (all formats, no filtering). Your job:\n"
-    "1. Extract EVERY credential or sensitive item: usernames, passwords, keys, "
-    "tokens — including plain CSV/JSON rows.\n"
-    "2. Entries marked head_truncated hide content beyond the per-file head — "
+    "1. Extract EVERY credential: usernames, passwords, keys, tokens — "
+    "including plain CSV/JSON rows.\n"
+    "2. Extract EVERY sensitive item, meaning:\n"
+    "   - PII: names, emails, phone numbers, addresses, ID/passport numbers, "
+    "dates of birth, salary/HR records, health data\n"
+    "   - Money-related: bank accounts, credit card numbers, invoices, "
+    "budgets, financial reports, payroll, payment/billing configs\n"
+    "   - Internal network: IP addresses, hostnames, architecture diagrams, "
+    "VPN/firewall/proxy configs, DNS zone files, internal URLs/APIs, "
+    "network credentials in configs, VLAN/subnet layouts, server inventory\n"
+    "3. Entries marked head_truncated hide content beyond the per-file head — "
     "fetch the rest with smb_read_file + offset when the head looks interesting.\n"
-    "3. Assess exposure with smb_get_permissions (probe=true) for confirmed items.\n"
-    "4. Produce the final report citing paths from the dump.{incomplete}\n")
+    "4. Assess exposure with smb_get_permissions (probe=true) for confirmed items.\n"
+    "5. Produce the final report citing paths from the dump.{incomplete}\n")
 
 
 def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str, list]:
