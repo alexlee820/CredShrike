@@ -79,6 +79,11 @@
   .status.error { background:#3d1c1c; color:var(--err); }
   .status.stopped { background:#3a2f16; color:var(--warn); }
   .hidden { display:none !important; }
+  /* overflow guards: grid items default to min-width:auto — one long log
+     line would blow the whole layout to 30000px+ */
+  .panel, #live, #report, #flagged, .kv, .bar, .bottom .cell { min-width:0; }
+  #live div { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+  #report, #flagged { overflow-wrap:anywhere; word-break:break-word; }
 </style>
 </head>
 <body>

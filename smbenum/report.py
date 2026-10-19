@@ -483,6 +483,12 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
           border:1px solid var(--line); border-radius:8px; overflow:hidden; }}
   th, td {{ padding:7px 10px; text-align:left; border-bottom:1px solid var(--line); font-size:13px; }}
   th {{ color:var(--dim); font-size:11px; text-transform:uppercase; background:#12171d; }}
+  td, th, pre, .path, .mono, .secret, .ev {{
+      overflow-wrap:anywhere; word-break:break-word; max-width:520px; }}
+  table {{ table-layout: fixed; }}
+  #credTable th:nth-child(1){{width:9%}} #credTable th:nth-child(2){{width:16%}}
+  #credTable th:nth-child(3){{width:20%}} #credTable th:nth-child(4){{width:35%}}
+  #credTable th:nth-child(5){{width:20%}}
   tr:last-child td {{ border-bottom:0; }}
   .dim {{ color:var(--dim); }} .path {{ font-family:Consolas,monospace; font-size:12px; color:#b9d4f0; }}
   .ev {{ font-size:11px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}

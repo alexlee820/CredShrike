@@ -148,6 +148,69 @@ def merge_findings(all_findings: list[dict]) -> dict:
     return {"credentials": list(credentials.values()), "other": other}
 
 
+def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
+                    policy: Policy, dc: str, domain_source: str, computers: list,
+                    client_factory, echo) -> None:
+    """Sweep ONE host end-to-end (fresh context): audit log → deterministic
+    dump embedded in the goal → analysis loop → findings extraction →
+    per-host HTML report. Raises on failure; entry fields are filled on
+    success. The caller handles retries and error recording."""
+    from .audit import AuditLog
+    from .findings import extract_findings
+    from .loop import AgentLoop
+    from .session import AgentSession
+    from ..report import write_report
+
+    audit = AuditLog.new_run(run_dir, suffix=host)
+    entry["audit_path"] = os.path.basename(audit.path)
+    session = AgentSession(credential, policy, audit, hosts=[host],
+                           dc=dc, domain_source=domain_source)
+    try:
+        dump_text, incomplete = _render_dump_for_goal(session, host, policy, echo)
+        incomplete_note = ("\nNOTE — dump incomplete: " + "; ".join(incomplete)
+                           if incomplete else "")
+        goal = _HOST_ANALYSIS_PROMPT.format(host=host,
+                                            incomplete=incomplete_note) + dump_text
+        entry["shares"] = session.share_inventories.get(host, [])
+        entry["bytes_read"] = session.budget.bytes_read  # includes the dump
+
+        loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
+        report_md = loop.run(goal)
+        entry["report_md"] = report_md
+        try:
+            entry["findings"] = extract_findings(client_factory(), policy, loop.messages)
+        except Exception as exc:  # noqa: BLE001 - merge what we have
+            entry["findings_error"] = f"{type(exc).__name__}: {exc}"
+
+        entry["tool_calls"] = session.budget.tool_calls
+        entry["bytes_read"] = session.budget.bytes_read
+
+        red = session.credential.redacted()
+        html_path = audit.path[:-len(".jsonl")] + ".report.html"
+        write_report(html_path,
+                     context={"principal": red["principal"],
+                              "auth_type": red["auth_type"], "scope": [host],
+                              "model": policy.model,
+                              "endpoint": policy.api_base_url or "api.anthropic.com"},
+                     findings=entry["findings"], scan_results=session.scan_results,
+                     flagged=session.flagged_files, report_md=report_md,
+                     audit_path=audit.path,
+                     domain_computers=[c.to_dict() for c in computers],
+                     share_inventories=session.share_inventories,
+                     transcript=loop.transcript,
+                     debug_results=session.debug_results if policy.debug else [])
+        entry["html"] = os.path.basename(html_path)
+        entry["status"] = "done"
+        echo(f"[domain] {host}: done — {len(entry['findings'])} finding(s), "
+             f"{entry['tool_calls']} calls, report "
+             f"{os.path.join(run_dir, entry['html'])}")
+    finally:
+        try:
+            session.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def run_domain_sweep(*, credential: Credential, policy: Policy,
                      audit_dir: str = "runs", dc: str = "", domain_source: str = "auto",
                      computers_filter: str = "", max_hosts: Optional[int] = None,
@@ -198,63 +261,30 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
 
         echo(f"[domain] ({index}/{len(hosts)}) {host}: sweeping")
         session = None
-        try:
-            audit = AuditLog.new_run(run_dir, suffix=host)
-            entry["audit_path"] = os.path.basename(audit.path)
-            session = AgentSession(credential, policy, audit, hosts=[host],
-                                   dc=dc, domain_source=domain_source)
-            # deterministic phase: EVERY file dumped code-side and embedded
-            # in the goal — the model never has to decide to fetch the bulk
-            dump_text, incomplete = _render_dump_for_goal(session, host, policy, echo)
-            incomplete_note = ("\nNOTE — dump incomplete: " + "; ".join(incomplete)
-                               if incomplete else "")
-            goal = _HOST_ANALYSIS_PROMPT.format(host=host,
-                                                incomplete=incomplete_note) + dump_text
-            entry["tool_calls"] = session.budget.tool_calls
-            entry["bytes_read"] = session.budget.bytes_read
-            entry["shares"] = session.share_inventories.get(host, [])
-
-            loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
-            report_md = loop.run(goal)
-            entry["report_md"] = report_md
+        # one retry on transient KDC/network errors ('No answer!', resets) —
+        # pass-the-ticket paths ask the KDC for a per-host TGS and lab KDC
+        # connections occasionally drop
+        transient_markers = ("no answer", "connection reset", "broken pipe",
+                             "unpack requires", "timed out", "timeout")
+        for attempt in (1, 2):
+            if attempt == 2:
+                echo(f"[domain] {host}: transient error — retrying once")
+                time.sleep(3)
+                entry.update(status="pending", error="", findings=[], report_md="",
+                             html="", tool_calls=0, bytes_read=0, shares=[])
             try:
-                entry["findings"] = extract_findings(client_factory(), policy, loop.messages)
-            except Exception as exc:  # noqa: BLE001 - merge what we have
-                entry["findings_error"] = f"{type(exc).__name__}: {exc}"
-
-            entry["shares"] = session.share_inventories.get(host, [])
-            entry["tool_calls"] = session.budget.tool_calls
-            entry["bytes_read"] = session.budget.bytes_read  # includes the embedded dump
-
-            red = session.credential.redacted()
-            html_path = audit.path[:-len(".jsonl")] + ".report.html"
-            write_report(html_path,
-                         context={"principal": red["principal"],
-                                  "auth_type": red["auth_type"], "scope": [host],
-                                  "model": policy.model,
-                                  "endpoint": policy.api_base_url or "api.anthropic.com"},
-                         findings=entry["findings"], scan_results=session.scan_results,
-                         flagged=session.flagged_files, report_md=report_md,
-                         audit_path=audit.path,
-                         domain_computers=[c.to_dict() for c in computers],
-                         share_inventories=session.share_inventories,
-                         transcript=loop.transcript,
-                         debug_results=session.debug_results if policy.debug else [])
-            entry["html"] = os.path.basename(html_path)
-            entry["status"] = "done"
-            echo(f"[domain] {host}: done — {len(entry['findings'])} finding(s), "
-                 f"{entry['tool_calls']} calls, report "
-                 f"{os.path.join(run_dir, entry['html'])}")
-        except Exception as exc:  # noqa: BLE001 - one host must not kill the sweep
-            entry["status"] = "error"
-            entry["error"] = f"{type(exc).__name__}: {exc}"
-            echo(f"[domain] {host}: ERROR — {entry['error'][:200]}")
-        finally:
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                _sweep_one_host(entry, host, run_dir, credential, policy, dc,
+                                domain_source, computers, client_factory, echo)
+                break   # success (or permanent error already recorded)
+            except Exception as exc:  # noqa: BLE001
+                message = str(exc).lower()
+                if attempt == 1 and any(m in message for m in transient_markers):
+                    entry["error"] = f"{type(exc).__name__}: {exc}"
+                    continue      # retry once
+                entry["status"] = "error"
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+                echo(f"[domain] {host}: ERROR — {entry['error'][:200]}")
+                break
         total_calls = sum(r["tool_calls"] for r in results)
 
     merged = merge_findings([f for r in results for f in r["findings"]])
