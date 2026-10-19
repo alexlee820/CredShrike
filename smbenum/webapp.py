@@ -120,7 +120,10 @@ def _execute_run(state: RunState) -> None:
         policy = Policy.load(params.get("policy_path") or None)
         _apply_policy_overrides(policy, params)
 
-        if params.get("preset") == "full-domain":
+        # default preset: bare runs (no preset AND no goal) → full-domain sweep
+        effective_preset = params.get("preset") or \
+            ("" if params.get("goal") else "full-domain")
+        if effective_preset == "full-domain":
             from .orchestrator import run_domain_sweep
             summary = run_domain_sweep(
                 credential=credential, policy=policy,

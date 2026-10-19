@@ -13,25 +13,19 @@ from smbenum.domain.base import ComputerRecord
 
 
 def _client_factory_for_hosts(hosts_findings: dict):
-    """factory() is called TWICE per host: loop client (shares call + final
-    report), then extraction client (findings JSON). Even calls pop the next
-    host; odd calls reuse the same host's findings."""
+    """factory() is called TWICE per host: loop client (the dump is ALREADY
+    embedded in the goal — model can answer immediately), then extraction
+    client (findings JSON). Even calls pop the next host."""
     queue = list(hosts_findings.items())
-    state = {"last": None}
+    state = {"last": None, "goals": []}
 
     def factory():
         class LoopMsgs:
             def create(self, **kw):
-                if not getattr(self, "used", False):
-                    self.used = True
-                    return SimpleNamespace(
-                        stop_reason="tool_use",
-                        content=[SimpleNamespace(type="tool_use", id="t1",
-                                                 name="smb_list_shares",
-                                                 input={"host": host})])
+                state["goals"].append(kw.get("messages"))
                 return SimpleNamespace(stop_reason="end_turn",
-                                       content=[SimpleNamespace(type="text",
-                                                                text=f"report for {host}")])
+                                       content=[SimpleNamespace(
+                                           type="text", text=f"report for {host}")])
 
         class ExtractMsgs:
             def create(self, **kw):
@@ -48,6 +42,7 @@ def _client_factory_for_hosts(hosts_findings: dict):
         state["last"] = None
         return SimpleNamespace(messages=ExtractMsgs())
 
+    factory.state = state
     return factory
 
 
@@ -99,6 +94,14 @@ def test_domain_sweep_merges_and_skips(tmp_path, fake_smb):
     statuses = {h["host"]: h["status"] for h in result["hosts"]}
     assert statuses == {"ws01.corp.local": "done", "ws02.corp.local": "unreachable",
                         "ws03.corp.local": "done"}
+    # the dump is DETERMINISTIC and embedded: the model's first message (the
+    # goal) already contains the host's actual file contents, and the model
+    # never had to call a dump tool (zero tool calls per host)
+    for host_messages in factory.state["goals"]:
+        goal_text = str(host_messages[0]["content"])
+        assert "COMPLETE deterministic content dump" in goal_text
+        assert "=== SHARE IT (" in goal_text and "ABC" in goal_text  # real content
+    assert all(h["tool_calls"] == 0 for h in result["hosts"])
     # cross-host merge: SamePass1 (svc) collapsed to ONE credential, 2 locations
     creds = result["merged"]["credentials"]
     same = next(c for c in creds if c["secret"] == "SamePass1")
@@ -119,7 +122,7 @@ def test_domain_sweep_merges_and_skips(tmp_path, fake_smb):
 
 def test_domain_sweep_budget_gate(tmp_path, fake_smb):
     policy = Policy()
-    policy.max_tool_calls = 1            # first host consumes it; rest skipped
+    policy.max_total_read_bytes = 10     # first host's dump exhausts it
     result = run_domain_sweep(
         credential=_credential(), policy=policy, audit_dir=str(tmp_path),
         client_factory=_client_factory_for_hosts({
@@ -145,3 +148,14 @@ def test_merge_findings_unit():
     c = merged["credentials"][0]
     assert c["severity"] == "high" and len(c["locations"]) == 2
     assert len(merged["other"]) == 1
+
+
+def test_resolve_preset_default_is_full_domain():
+    from smbenum.agent.cli_agent import _resolve_preset
+    from types import SimpleNamespace as NS
+    # bare invocation -> full-domain default
+    assert _resolve_preset(NS(preset=None, goal=None, repl=False)) == "full-domain"
+    # explicit preset / goal / repl win
+    assert _resolve_preset(NS(preset="snaffler", goal=None, repl=False)) == "snaffler"
+    assert _resolve_preset(NS(preset=None, goal="find x", repl=False)) is None
+    assert _resolve_preset(NS(preset=None, goal=None, repl=True)) is None

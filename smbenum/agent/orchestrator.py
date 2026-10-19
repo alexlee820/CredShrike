@@ -31,6 +31,74 @@ from ..credentials import Credential
 
 _SEV_ORDER = {"high": 3, "medium": 2, "low": 1}
 
+# when no context limit is configured, cap the embedded dump at ~400K chars
+# (~100-130K tokens) so the analysis conversation still fits typical windows
+_DEFAULT_GOAL_CHAR_BUDGET = 400_000
+
+_HOST_ANALYSIS_PROMPT = (
+    "Below is the COMPLETE deterministic content dump of every file on host "
+    "{host} — gathered code-side (all formats, no filtering). Your job:\n"
+    "1. Extract EVERY credential or sensitive item: usernames, passwords, keys, "
+    "tokens — including plain CSV/JSON rows.\n"
+    "2. Entries marked head_truncated hide content beyond the per-file head — "
+    "fetch the rest with smb_read_file + offset when the head looks interesting.\n"
+    "3. Assess exposure with smb_get_permissions (probe=true) for confirmed items.\n"
+    "4. Produce the final report citing paths from the dump.{incomplete}\n")
+
+
+def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str, list]:
+    """Deterministically dump EVERY share of one host (code-side, no LLM
+    decisions) and render it as text to embed in the analysis goal. Returns
+    (dump_text, incomplete_notes). Special shares (IPC$/ADMIN$-style) are
+    skipped. Global byte budget is respected; when the dump exceeds the char
+    budget the remainder is noted for the model to page in itself."""
+    from ..scanner import dump_share
+
+    shares = session.smb(host).list_shares()
+    session.share_inventories[host] = shares
+    dumpable = [s for s in shares if not s.get("special")]
+    echo(f"[domain] {host}: dumping {len(dumpable)}/{len(shares)} shares "
+         f"({', '.join(s['name'] for s in dumpable)})")
+
+    char_budget = int((policy.context_token_limit or 133000) * 3) \
+        if policy.context_token_limit else _DEFAULT_GOAL_CHAR_BUDGET
+    bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
+    chunks: list[str] = []
+    notes: list[str] = []
+    for share in dumpable:
+        result = dump_share(
+            session.smb(host), share["name"], "",
+            depth=policy.dump_depth,
+            per_file_bytes=policy.dump_per_file_bytes,
+            page_chars=char_budget,           # single page: take everything
+            max_files=policy.dump_max_files,
+            max_total_bytes=max(0, bytes_left),
+            on_event=lambda kind, data: echo(f"  ⋮ {kind} {data.get('path', '')}"
+                                             if isinstance(data, dict) else ""),
+        )
+        session.budget.bytes_read += int(result["stats"]["bytes_read"])
+        bytes_left -= int(result["stats"]["bytes_read"])
+        chunks.append(f"=== SHARE {share['name']} "
+                      f"({result['stats']['files_dumped']} files) ===")
+        for entry in result["files"]:
+            header = f"---- {entry['path']} ({entry['size']}B" \
+                     f"{' head_truncated' if entry['head_truncated'] else ''}) ----"
+            chunks.append(header + "\n" + entry["content"])
+        if result.get("truncated"):
+            notes.append(f"share {share['name']} dump was cut short "
+                         f"({result.get('stop_reason')}) — continue it with "
+                         f"smb_dump_share(share={share['name']!r}, skip_files="
+                         f"{result['stats']['files_dumped']})")
+        if sum(len(c) for c in chunks) > char_budget:
+            notes.append(f"char budget reached while embedding share "
+                         f"{share['name']} — the remaining shares/files were NOT "
+                         f"included; page them with smb_dump_share yourself")
+            break
+    special = [s["name"] for s in shares if s.get("special")]
+    if special:
+        chunks.append(f"(special shares skipped: {', '.join(special)})")
+    return "\n".join(chunks), notes
+
 
 def _port_open(host: str, port: int = 445, timeout: float = 3.0) -> bool:
     try:
@@ -115,11 +183,13 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                  "tool_calls": 0, "bytes_read": 0}
         results.append(entry)
 
+        total_bytes = sum(r["bytes_read"] for r in results)
         if total_calls >= policy.max_tool_calls or \
+                total_bytes >= policy.max_total_read_bytes or \
                 time.time() - started > policy.wall_clock_seconds:
             entry["status"] = "skipped-budget"
             echo(f"[domain] ({index}/{len(hosts)}) {host}: SKIPPED — global budget "
-                 f"({total_calls}/{policy.max_tool_calls} calls) exhausted")
+                 f"({total_calls} calls / {total_bytes // 1024}K read) exhausted")
             continue
         if not reachable_check(host):
             entry["status"] = "unreachable"
@@ -133,8 +203,19 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
             entry["audit_path"] = os.path.basename(audit.path)
             session = AgentSession(credential, policy, audit, hosts=[host],
                                    dc=dc, domain_source=domain_source)
+            # deterministic phase: EVERY file dumped code-side and embedded
+            # in the goal — the model never has to decide to fetch the bulk
+            dump_text, incomplete = _render_dump_for_goal(session, host, policy, echo)
+            incomplete_note = ("\nNOTE — dump incomplete: " + "; ".join(incomplete)
+                               if incomplete else "")
+            goal = _HOST_ANALYSIS_PROMPT.format(host=host,
+                                                incomplete=incomplete_note) + dump_text
+            entry["tool_calls"] = session.budget.tool_calls
+            entry["bytes_read"] = session.budget.bytes_read
+            entry["shares"] = session.share_inventories.get(host, [])
+
             loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
-            report_md = loop.run(FULL_PRESET)
+            report_md = loop.run(goal)
             entry["report_md"] = report_md
             try:
                 entry["findings"] = extract_findings(client_factory(), policy, loop.messages)
@@ -143,7 +224,7 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
 
             entry["shares"] = session.share_inventories.get(host, [])
             entry["tool_calls"] = session.budget.tool_calls
-            entry["bytes_read"] = session.budget.bytes_read
+            entry["bytes_read"] = session.budget.bytes_read  # includes the embedded dump
 
             red = session.credential.redacted()
             html_path = audit.path[:-len(".jsonl")] + ".report.html"

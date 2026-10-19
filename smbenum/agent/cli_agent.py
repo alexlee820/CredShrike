@@ -128,9 +128,21 @@ def _make_client(policy=None):
     return Anthropic(**kwargs)  # falls back to ANTHROPIC_API_KEY / auth profile
 
 
+def _resolve_preset(args) -> Optional[str]:
+    """Effective preset: explicit wins; bare invocation (no preset, no goal,
+    not REPL) defaults to full-domain — the per-computer fan-out sweep."""
+    if args.preset:
+        return args.preset
+    if getattr(args, "goal", None) or getattr(args, "repl", False):
+        return None
+    return "full-domain"
+
+
 def cmd_agent(args) -> None:
-    # full-domain: per-computer fan-out (each host gets its own context window)
-    if args.preset == "full-domain":
+    # full-domain: per-computer fan-out (each host gets its own context window;
+    # every file is dumped code-side and embedded — the model never has to
+    # decide to fetch the bulk)
+    if _resolve_preset(args) == "full-domain":
         from .orchestrator import run_domain_sweep
         credential = build_credential(args)
         policy = _load_policy(args)
@@ -251,6 +263,10 @@ def register(subparsers) -> None:
                         "API and OFF when --api-base-url is set (3rd-party endpoints may "
                         "reject the thinking parameter)")
     p.add_argument("--goal", default=None, help="run one goal non-interactively and exit")
+    p.add_argument("--repl", action="store_true",
+                   help="start the interactive REPL even with no --goal/--preset "
+                        "(bare `smbenum agent` otherwise defaults to a "
+                        "full-domain sweep)")
     p.add_argument("--debug", action="store_true",
                    help="debug mode: echo the FULL tool results (exactly what the "
                         "model received — verify transports like adws via the "
