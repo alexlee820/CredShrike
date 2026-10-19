@@ -103,7 +103,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                       domain_computers: Optional[list] = None,
                       share_inventories: Optional[dict] = None,
                       transcript: Optional[list] = None,
-                      debug_results: Optional[list] = None) -> str:
+                      debug_results: Optional[list] = None,
+                      dump_stats: Optional[dict] = None) -> str:
     audit = _read_audit(audit_path)
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
@@ -345,6 +346,13 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
 </div>
 
 <div class="tab-panel" id="smb">
+  {"<h2>Code-side dump (full-domain) — EVERY file, read before the AI started</h2>"
+   f"<p style='font-size:13px'>files seen <b>{dump_stats.get('files_seen', 0)}</b> · "
+   f"files read <b>{dump_stats.get('files_dumped', 0)}</b> · "
+   f"dirs walked <b>{dump_stats.get('dirs_walked', 0)}</b> · "
+   f"<b>{dump_stats.get('bytes_read', 0) // 1024} KiB</b> embedded in the analysis goal"
+   f"{' · errors: ' + str(dump_stats.get('errors', 0)) if dump_stats.get('errors') else ''}"
+   "</p>" if dump_stats else ""}
   <h2>Files read ({len(reads)})</h2>
   <table><tr><th>file read</th><th>range</th><th>verdict</th><th>duration</th></tr>{read_rows}</table>
   <h2>Flagged files (not read, {len(flagged)})</h2>

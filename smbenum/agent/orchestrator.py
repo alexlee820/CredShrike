@@ -65,6 +65,8 @@ def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str
     bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
     chunks: list[str] = []
     notes: list[str] = []
+    dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
+                  "bytes_read": 0, "errors": 0}
     for share in dumpable:
         result = dump_share(
             session.smb(host), share["name"], "",
@@ -78,6 +80,8 @@ def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str
         )
         session.budget.bytes_read += int(result["stats"]["bytes_read"])
         bytes_left -= int(result["stats"]["bytes_read"])
+        for key in dump_stats:
+            dump_stats[key] += int(result["stats"].get(key, 0))
         chunks.append(f"=== SHARE {share['name']} "
                       f"({result['stats']['files_dumped']} files) ===")
         for entry in result["files"]:
@@ -97,7 +101,7 @@ def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str
     special = [s["name"] for s in shares if s.get("special")]
     if special:
         chunks.append(f"(special shares skipped: {', '.join(special)})")
-    return "\n".join(chunks), notes
+    return "\n".join(chunks), notes, dump_stats
 
 
 def _port_open(host: str, port: int = 445, timeout: float = 3.0) -> bool:
@@ -166,7 +170,8 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
     session = AgentSession(credential, policy, audit, hosts=[host],
                            dc=dc, domain_source=domain_source)
     try:
-        dump_text, incomplete = _render_dump_for_goal(session, host, policy, echo)
+        dump_text, incomplete, dump_stats = _render_dump_for_goal(session, host, policy, echo)
+        entry["dump_stats"] = dump_stats
         incomplete_note = ("\nNOTE — dump incomplete: " + "; ".join(incomplete)
                            if incomplete else "")
         goal = _HOST_ANALYSIS_PROMPT.format(host=host,
@@ -198,7 +203,8 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                      domain_computers=[c.to_dict() for c in computers],
                      share_inventories=session.share_inventories,
                      transcript=loop.transcript,
-                     debug_results=session.debug_results if policy.debug else [])
+                     debug_results=session.debug_results if policy.debug else [],
+                     dump_stats=entry.get("dump_stats"))
         entry["html"] = os.path.basename(html_path)
         entry["status"] = "done"
         echo(f"[domain] {host}: done — {len(entry['findings'])} finding(s), "

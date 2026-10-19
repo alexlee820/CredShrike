@@ -159,3 +159,19 @@ def test_resolve_preset_default_is_full_domain():
     assert _resolve_preset(NS(preset="snaffler", goal=None, repl=False)) == "snaffler"
     assert _resolve_preset(NS(preset=None, goal="find x", repl=False)) is None
     assert _resolve_preset(NS(preset=None, goal=None, repl=True)) is None
+
+
+def test_dump_stats_surface_in_report(tmp_path, fake_smb):
+    """The code-side dump reads EVERY file but bypasses the executor/audit —
+    the report must show it explicitly or the biggest phase is invisible."""
+    factory = _client_factory_for_hosts({"ws01.corp.local": []})
+    result = run_domain_sweep(
+        credential=_credential(), policy=Policy(), audit_dir=str(tmp_path),
+        client_factory=factory, echo=lambda l: None,
+        source_override=[ComputerRecord(cn="WS01", dns_name="ws01.corp.local")],
+        reachable_check=lambda host: True)
+    entry = result["hosts"][0]
+    assert entry["dump_stats"]["files_dumped"] > 0        # FakeSMB dumps its files
+    report = open(os.path.join(result["run_dir"], entry["html"]), encoding="utf-8").read()
+    assert "Code-side dump (full-domain)" in report
+    assert f"files read <b>{entry['dump_stats']['files_dumped']}</b>" in report
