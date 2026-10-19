@@ -216,9 +216,12 @@ $('authType').onchange = () => {
   for (const f of ['f_password','f_ntlm','f_aes','f_ticket']) $(f).classList.add('hidden');
   $('f_' + t).classList.remove('hidden');
 };
-$('preset').onchange = () =>
+function syncGoalVisibility() {
   $('goalWrap').style.display =
     ['snaffler','full','full-domain'].includes($('preset').value) ? 'none' : '';
+}
+$('preset').onchange = syncGoalVisibility;
+syncGoalVisibility();   // page load: default preset (full-domain) hides Goal too
 
 $('startBtn').onclick = async () => {
   const params = {
