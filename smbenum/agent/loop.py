@@ -46,6 +46,55 @@ class AgentLoop:
         self._budget_final_requested = False
         self._executor = None
         self.stop_requested = False   # set by the UI/REPL to break the loop
+        # context-window management
+        self.context_tokens = 0       # input_tokens of the most recent call
+        self._compactions = 0
+
+    # ------------------------------------------------------------------ #
+    # context-window management
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _usage_input_tokens(response) -> int:
+        usage = getattr(response, "usage", None)
+        return int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+
+    def _maybe_compact(self) -> None:
+        """Replace OLD tool_result contents with placeholders when the
+        conversation approaches the configured context limit. Keeps the
+        tool_use/tool_result pairing intact (structure preserved, bulk
+        dropped), never touches the newest messages, goals or assistant
+        turns — so the model keeps its mission and findings."""
+        limit = self.policy.context_token_limit
+        if not limit or self.context_tokens < limit * self.policy.compact_at_ratio:
+            return
+        self._compact()
+
+    def _compact(self) -> None:
+        keep = self.policy.compact_keep_recent
+        protected = self.messages[-keep:] if keep else []
+        replaced = saved_chars = 0
+        for msg in self.messages[:len(self.messages) - (keep or 0)]:
+            if msg in protected or not isinstance(msg.get("content"), list):
+                continue
+            for block in msg["content"]:
+                if isinstance(block, dict) and block.get("type") == "tool_result" \
+                        and isinstance(block.get("content"), str) \
+                        and len(block["content"]) > 200:
+                    saved_chars += len(block["content"])
+                    block["content"] = (f"[compacted: was {len(block['content'])} chars — "
+                                        f"re-query the tool if you need this again]")
+                    replaced += 1
+        self._compactions += 1
+        if replaced:
+            self.echo(f"[context] compacted {replaced} old tool results "
+                      f"(~{saved_chars // 1000}K chars) at "
+                      f"{self.context_tokens}/{self.policy.context_token_limit} tokens")
+
+    def _is_context_overflow(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(key in text for key in (
+            "prompt is too long", "context length", "context window",
+            "maximum context", "too many tokens", "input tokens"))
 
     @property
     def executor(self):
@@ -65,7 +114,17 @@ class AgentLoop:
                 self.echo("[stopped] interrupted by user — returning partial state")
                 return ("(stopped by user — no final report was produced; see the "
                         "live log and audit trail for what was collected)")
-            response = self._create()
+            try:
+                response = self._create()
+            except Exception as exc:  # noqa: BLE001 - self-heal context overflow
+                if self._is_context_overflow(exc) and self._compactions < 2:
+                    self.echo(f"[context] API rejected the request as too long — "
+                              f"compacting history and retrying")
+                    self._compact()
+                    continue
+                raise
+            self.context_tokens = self._usage_input_tokens(response)
+            self._maybe_compact()
             self.messages.append({"role": "assistant", "content": response.content})
 
             # capture the AI response for the report transcript

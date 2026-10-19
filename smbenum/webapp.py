@@ -91,6 +91,8 @@ class RunState:
                          "endpoint": session.policy.api_base_url or "api.anthropic.com",
                          "thinking": session.policy.thinking_mode,
                          "debug": session.policy.debug} if session else None),
+            "context_tokens": (self.loop.context_tokens if self.loop else 0),
+            "context_limit": (session.policy.context_token_limit or 0 if session else 0),
         }
 
 
@@ -236,6 +238,8 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.thinking_mode = "off"
     if params.get("debug"):
         policy.debug = True
+    if params.get("context_limit"):
+        policy.context_token_limit = int(params["context_limit"])
 
 
 # --------------------------------------------------------------------------- #

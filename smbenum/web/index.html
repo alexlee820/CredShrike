@@ -161,6 +161,8 @@
           <input id="redact" placeholder="ProjectX,10.0.0.5"/></div>
         <div class="field full"><label>Redact regex — one per line</label>
           <textarea id="redactPatterns" placeholder="password\s*=\s*(\S+)"></textarea></div>
+        <div class="field full"><label>Context limit (tokens — 0 = off; GLM ≈ 128000; auto-compacts old tool results at 75%)</label>
+          <input id="contextLimit" type="number" placeholder="128000"/></div>
       </div>
     </details>
 
@@ -222,6 +224,7 @@ $('startBtn').onclick = async () => {
     api_base_url: $('apiBaseUrl').value.trim(),
     api_key: $('apiKey').value.trim(),
     debug: $('debugMode').checked,
+    context_limit: $('contextLimit').value || 0,
   };
   const r = await fetch('/api/runs', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify(params)});
@@ -263,9 +266,11 @@ async function poll() {
   if (s.budget) {
     const pct = Math.min(100, 100 * s.budget.tool_calls / s.budget.max_tool_calls);
     $('budgetBar').style.width = pct + '%';
+    const ctx = s.context_limit
+      ? `<span>context <b>${(s.context_tokens/1000).toFixed(1)}K/${(s.context_limit/1000).toFixed(0)}K</b></span>` : '';
     $('kv').innerHTML =
       `<span>calls <b>${s.budget.tool_calls}/${s.budget.max_tool_calls}</b></span>` +
-      `<span>read <b>${(s.budget.bytes_read/1024).toFixed(0)}/${(s.budget.max_total_read_bytes/1048576).toFixed(0)} MiB</b></span>` +
+      `<span>read <b>${(s.budget.bytes_read/1024).toFixed(0)}/${(s.budget.max_total_read_bytes/1048576).toFixed(0)} MiB</b></span>` + ctx +
       `<span>elapsed <b>${s.budget.elapsed_s}s</b></span>` +
       `<span>redactions <b>${s.redactions}</b></span>` +
       `<span>audit <b>${s.audit_path}</b></span>`;

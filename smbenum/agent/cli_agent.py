@@ -41,6 +41,8 @@ def _build_session(args):
         policy.debug = True
         import logging
         logging.getLogger("smbenum").setLevel(logging.DEBUG)
+    if getattr(args, "context_limit", None):
+        policy.context_token_limit = int(args.context_limit)
     from .audit import AuditLog
     from .session import AgentSession
     audit = AuditLog.new_run(args.audit_dir)
@@ -158,6 +160,8 @@ def cmd_agent(args) -> None:
             if goal == "/budget":
                 snap = session.budget.snapshot()
                 snap["flagged_files"] = len(session.flagged_files)
+                snap["context_tokens"] = loop.context_tokens
+                snap["context_limit"] = policy.context_token_limit or "off"
                 print(snap)
                 continue
             if goal == "/flagged":
@@ -225,4 +229,9 @@ def register(subparsers) -> None:
                         "model received — verify transports like adws via the "
                         "'source' field, inspect dump/scan pages); also recorded "
                         "in the report's Debug tab")
+    p.add_argument("--context-limit", type=int, default=None,
+                   help="your model's context window in tokens (e.g. 128000 for "
+                        "GLM). When the conversation passes 75%% of it, old tool "
+                        "results are compacted to placeholders; overflows also "
+                        "self-heal by compacting and retrying")
     p.set_defaults(func=cmd_agent)

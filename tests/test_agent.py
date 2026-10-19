@@ -486,3 +486,59 @@ def test_debug_off_captures_nothing(session):
     assert not session.policy.debug
     _executor(session).execute("smb_list_shares", {"host": "filesrv01.corp.local"})
     assert session.debug_results == []
+
+
+# --------------------------------------------------------------------------- #
+# context-window management
+# --------------------------------------------------------------------------- #
+def _resp(text, input_tokens=0):
+    return SimpleNamespace(stop_reason="end_turn",
+                           content=[_text(text)],
+                           usage=SimpleNamespace(input_tokens=input_tokens,
+                                                 output_tokens=10))
+
+
+def test_context_tracking_and_ratio_compaction(session):
+    session.policy.context_token_limit = 1000
+    session.policy.compact_at_ratio = 0.5
+    session.policy.compact_keep_recent = 2
+    big = "x" * 2000
+    client = SimpleNamespace(messages=FakeMessages([
+        SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=100, output_tokens=5),
+                        content=[_tool_use("t1", "smb_list_shares",
+                                           {"host": "filesrv01.corp.local"})]),
+        # second call reports 600 input tokens -> over 50% of 1000 -> compact
+        _resp("final", input_tokens=600),
+    ]))
+    from smbenum.agent.loop import AgentLoop
+    loop = AgentLoop(client, session, session.policy, session.audit,
+                     echo=lambda l: None)
+    # seed one old tool_result big enough to be compacted (protect last 2 msgs)
+    loop.messages = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t-old", "content": big}]}]
+    loop.run("go")
+    assert loop.context_tokens == 600
+    assert loop._compactions == 1
+    old = loop.messages[0]["content"][0]
+    assert old["content"].startswith("[compacted: was 2000 chars")
+    assert old["tool_use_id"] == "t-old"          # pairing structure intact
+
+
+def test_context_overflow_self_heals(session):
+    calls = {"n": 0}
+
+    class Heal:
+        def create(self, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("Error code: 400 - prompt is too long for this model")
+            return _resp("recovered", input_tokens=100)
+
+    from smbenum.agent.loop import AgentLoop
+    loop = AgentLoop(SimpleNamespace(messages=Heal()), session, session.policy,
+                     session.audit, echo=lambda l: None)
+    loop.messages = [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t-old", "content": "y" * 5000}]}]
+    out = loop.run("go")
+    assert out == "recovered" and calls["n"] == 2
+    assert loop._compactions == 1                 # compacted once, then retried
