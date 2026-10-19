@@ -542,3 +542,33 @@ def test_context_overflow_self_heals(session):
     out = loop.run("go")
     assert out == "recovered" and calls["n"] == 2
     assert loop._compactions == 1                 # compacted once, then retried
+
+
+def test_goal_survives_compaction(session):
+    # goals are STRING user messages — compaction must never touch them
+    session.policy.context_token_limit = 1000
+    session.policy.compact_at_ratio = 0.1
+    session.policy.compact_keep_recent = 1
+    client = SimpleNamespace(messages=FakeMessages([
+        SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=50, output_tokens=5),
+                        content=[_tool_use("t1", "smb_list_shares",
+                                           {"host": "filesrv01.corp.local"})]),
+        _resp("mid", input_tokens=500),
+        SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=600, output_tokens=5),
+                        content=[_tool_use("t2", "smb_list_shares",
+                                           {"host": "filesrv01.corp.local"})]),
+        _resp("final", input_tokens=900),
+    ]))
+    from smbenum.agent.loop import AgentLoop
+    loop = AgentLoop(client, session, session.policy, session.audit, echo=lambda l: None)
+    out = loop.run("FIND THE GOLDEN PASSWORD")
+    assert out == "final"
+    assert loop.messages[0] == {"role": "user", "content": "FIND THE GOLDEN PASSWORD"}
+    assert loop._compactions >= 1
+    # aggressive escalation: second overflow clears even recent results
+    loop._compact(aggressive=True)
+    leftover = [b for m in loop.messages if isinstance(m.get("content"), list)
+                for b in m["content"]
+                if b.get("type") == "tool_result" and len(b.get("content", "")) > 200]
+    assert leftover == []          # everything compacted...
+    assert loop.messages[0]["content"] == "FIND THE GOLDEN PASSWORD"   # ...except the goal

@@ -69,8 +69,12 @@ class AgentLoop:
             return
         self._compact()
 
-    def _compact(self) -> None:
-        keep = self.policy.compact_keep_recent
+    def _compact(self, aggressive: bool = False) -> None:
+        """aggressive=True (second overflow): drop the keep-recent protection
+        too — every tool result becomes a placeholder. Goals (string user
+        messages) and assistant narration are NEVER touched, so the model
+        can never lose the mission or its own findings."""
+        keep = 0 if aggressive else self.policy.compact_keep_recent
         protected = self.messages[-keep:] if keep else []
         replaced = saved_chars = 0
         for msg in self.messages[:len(self.messages) - (keep or 0)]:
@@ -86,9 +90,9 @@ class AgentLoop:
                     replaced += 1
         self._compactions += 1
         if replaced:
-            self.echo(f"[context] compacted {replaced} old tool results "
-                      f"(~{saved_chars // 1000}K chars) at "
-                      f"{self.context_tokens}/{self.policy.context_token_limit} tokens")
+            self.echo(f"[context] compacted {replaced} tool results "
+                      f"(~{saved_chars // 1000}K chars{' , aggressive' if aggressive else ''}) "
+                      f"at {self.context_tokens}/{self.policy.context_token_limit or '?'} tokens")
 
     def _is_context_overflow(self, exc: Exception) -> bool:
         text = str(exc).lower()
@@ -120,7 +124,7 @@ class AgentLoop:
                 if self._is_context_overflow(exc) and self._compactions < 2:
                     self.echo(f"[context] API rejected the request as too long — "
                               f"compacting history and retrying")
-                    self._compact()
+                    self._compact(aggressive=(self._compactions >= 1))
                     continue
                 raise
             self.context_tokens = self._usage_input_tokens(response)
