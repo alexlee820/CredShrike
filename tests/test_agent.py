@@ -553,10 +553,10 @@ def test_goal_survives_compaction(session):
         SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=50, output_tokens=5),
                         content=[_tool_use("t1", "smb_list_shares",
                                            {"host": "filesrv01.corp.local"})]),
-        _resp("mid", input_tokens=500),
         SimpleNamespace(stop_reason="tool_use", usage=SimpleNamespace(input_tokens=600, output_tokens=5),
-                        content=[_tool_use("t2", "smb_list_shares",
-                                           {"host": "filesrv01.corp.local"})]),
+                        content=[_tool_use("t2", "smb_list_dir",
+                                           {"host": "filesrv01.corp.local",
+                                            "share": "IT", "path": ""})]),
         _resp("final", input_tokens=900),
     ]))
     from smbenum.agent.loop import AgentLoop
@@ -569,6 +569,7 @@ def test_goal_survives_compaction(session):
     loop._compact(aggressive=True)
     leftover = [b for m in loop.messages if isinstance(m.get("content"), list)
                 for b in m["content"]
-                if b.get("type") == "tool_result" and len(b.get("content", "")) > 200]
+                if isinstance(b, dict) and b.get("type") == "tool_result"
+                and len(b.get("content", "")) > 200]
     assert leftover == []          # everything compacted...
     assert loop.messages[0]["content"] == "FIND THE GOLDEN PASSWORD"   # ...except the goal
