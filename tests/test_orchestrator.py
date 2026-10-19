@@ -168,7 +168,7 @@ def test_dump_stats_surface_in_report(tmp_path, fake_smb):
     result = run_domain_sweep(
         credential=_credential(), policy=Policy(), audit_dir=str(tmp_path),
         client_factory=factory, echo=lambda l: None,
-        source_override=[ComputerRecord(cn="WS01", dns_name="ws01.corp.local")],
+        source_override=lambda: [ComputerRecord(cn="WS01", dns_name="ws01.corp.local")],
         reachable_check=lambda host: True)
     entry = result["hosts"][0]
     assert entry["dump_stats"]["files_dumped"] > 0        # FakeSMB dumps its files
