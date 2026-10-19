@@ -27,10 +27,11 @@ def test_extract_findings_plain_json():
                              "host": "h", "share": "IT", "path": "a.ps1",
                              "username": "svc", "secret": "pwd123",
                              "evidence": "smb_read_file", "note": ""}]}
-    client, calls = _client([json.dumps(payload)])
+    # two passes now run — both return the same payload, union dedupes
+    client, calls = _client([json.dumps(payload), json.dumps(payload)])
     out = extract_findings(client, Policy(), [{"role": "user", "content": "go"}])
     assert out[0]["secret"] == "pwd123" and out[0]["severity"] == "high"
-    assert len(calls) == 1
+    assert len(out) == 1 and len(calls) == 2
 
 
 def test_extract_findings_fenced_and_dirty_prose():
@@ -40,11 +41,10 @@ def test_extract_findings_fenced_and_dirty_prose():
 
 
 def test_extract_findings_retries_on_garbage_then_succeeds():
-    client, calls = _client(["total garbage not json",
-                             '{"findings": [{"severity": "WEIRD", "category": "nope", '
-                             '"secret": "x"}]}'])
+    # pass1: garbage then good (parse retry); pass2: good directly
+    good = '{"findings": [{"severity": "WEIRD", "category": "nope", "secret": "x"}]}'
+    client, calls = _client(["total garbage not json", good, good])
     out = extract_findings(client, Policy(), [])
-    assert len(calls) == 2                       # retried once
     assert out[0]["severity"] == "low"           # invalid enum sanitized
     assert out[0]["category"] == "other"
 
@@ -153,44 +153,48 @@ def test_long_values_do_not_break_layout():
 
 
 def test_extraction_completeness_crosscheck():
-    """Real-world failure: the model's final report names HACKADAY\jchen but
-    the extraction JSON omits it -> ONE corrective round must fire."""
+    """Both extraction passes omit HACKADAY\jchen which the final report
+    names -> union is still short -> ONE corrective round fires and names
+    the miss."""
     import json as _json
     from smbenum.agent.findings import extract_findings
     calls = []
+    bs = chr(92)
 
     incomplete = _json.dumps({"findings": [{
         "severity": "high", "category": "credential", "host": "FILE01",
-        "share": "CTF$", "path": "vault.txt", "username": "HACKADAY\mwong",
+        "share": "CTF$", "path": "vault.txt",
+        "username": "HACKADAY" + bs + "mwong",
         "secret": "Pass1", "evidence": "read vault", "note": ""}]})
     complete = _json.dumps({"findings": [
         {"severity": "high", "category": "credential", "host": "FILE01",
-         "share": "CTF$", "path": "vault.txt", "username": "HACKADAY\mwong",
+         "share": "CTF$", "path": "vault.txt",
+         "username": "HACKADAY" + bs + "mwong",
          "secret": "Pass1", "evidence": "read vault", "note": ""},
         {"severity": "high", "category": "credential", "host": "FILE01",
          "share": "CTF$", "path": "IT/backup_old.bat",
-         "username": "HACKADAY\jchen", "secret": "Welcome1",
-         "evidence": "net use /user:HACKADAY\jchen Welcome1", "note": ""}]})
+         "username": "HACKADAY" + bs + "jchen", "secret": "Welcome1",
+         "evidence": "net use /user:HACKADAY jchen Welcome1", "note": ""}]})
 
     class Msgs:
         def create(self, **kw):
             calls.append(kw)
-            return SimpleNamespace(content=[SimpleNamespace(
-                type="text", text=incomplete if len(calls) == 1 else complete)])
+            text = incomplete if len(calls) <= 2 else complete
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
 
     from smbenum.config import Policy
     messages = [
         {"role": "user", "content": "goal"},
         {"role": "assistant", "content": [
             SimpleNamespace(type="text",
-                            text="| 6 | backup_old.bat | HACKADAY\jchen | Welcome1 | net use |")],
+                            text="| 6 | backup_old.bat | HACKADAY" + bs + "jchen | Welcome1 |")],
         },
     ]
     out = extract_findings(SimpleNamespace(messages=Msgs()), Policy(), messages)
     users = {f["username"] for f in out}
-    assert "HACKADAY\jchen" in users and "HACKADAY\mwong" in users
-    assert len(calls) == 2                       # corrective round fired
-    assert "jchen" in str(calls[1]["messages"][-1])   # corrective prompt named the miss
+    assert ("HACKADAY" + bs + "jchen") in users and ("HACKADAY" + bs + "mwong") in users
+    assert len(calls) == 3                        # 2 passes + 1 corrective round
+    assert "jchen" in str(calls[2]["messages"][-1])   # corrective prompt named the miss
 
 
 def test_placeholder_usernames_sanitized():
@@ -201,3 +205,52 @@ def test_placeholder_usernames_sanitized():
         {"severity": "low", "category": "credential", "username": "�",
          "secret": "y", "host": "", "share": "", "path": "", "evidence": "", "note": ""}]})
     assert all(f["username"] is None for f in out)
+
+
+def test_double_extraction_union_catches_omissions():
+    """Two passes each miss a different credential — the union keeps both,
+    no corrective round needed (both are in the report text)."""
+    import json as _json
+    from smbenum.agent.findings import extract_findings
+    calls = []
+
+    a_only = _json.dumps({"findings": [
+        {"severity": "high", "category": "credential", "host": "h", "share": "s",
+         "path": "a", "username": "HACKADAY" + chr(92) + "mwong", "secret": "P1",
+         "evidence": "e1", "note": ""}]})
+    b_only = _json.dumps({"findings": [
+        {"severity": "high", "category": "credential", "host": "h", "share": "s",
+         "path": "b", "username": "HACKADAY" + chr(92) + "jchen", "secret": "P2",
+         "evidence": "e2", "note": ""}]})
+
+    class Msgs:
+        def create(self, **kw):
+            calls.append(kw)
+            text = a_only if len(calls) == 1 else b_only
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
+
+    from smbenum.config import Policy
+    messages = [
+        {"role": "user", "content": "goal"},
+        {"role": "assistant", "content": [
+            SimpleNamespace(type="text",
+                            text="mwong and jchen both found")],
+        },
+    ]
+    out = extract_findings(SimpleNamespace(messages=Msgs()), Policy(), messages)
+    users = {f["username"] for f in out}
+    expected = {"HACKADAY" + chr(92) + "mwong", "HACKADAY" + chr(92) + "jchen"}
+    assert users == expected                                  # union, no dupes
+    assert len(calls) == 2                                    # both were pass 1&2
+
+
+def test_union_dedupes_same_credential():
+    from smbenum.agent.findings import _merge_passes
+    entry = {"severity": "low", "category": "credential", "host": "h", "share": "s",
+             "path": "a", "username": "HACKADAY" + chr(92) + "x", "secret": "P",
+             "evidence": "e1", "note": ""}
+    higher = dict(entry, severity="high", evidence="e2", path="b")
+    merged = _merge_passes([[entry], [higher]])
+    assert len(merged) == 1
+    assert merged[0]["severity"] == "high"            # max severity wins
+    assert "e1" in merged[0]["evidence"] and "e2" in merged[0]["evidence"]

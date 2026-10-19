@@ -215,7 +215,12 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                      audit_dir: str = "runs", dc: str = "", domain_source: str = "auto",
                      computers_filter: str = "", max_hosts: Optional[int] = None,
                      client_factory: Optional[Callable] = None, echo=print,
-                     source_override=None, reachable_check: Callable = _port_open) -> dict:
+                     source_override=None, reachable_check: Optional[Callable] = None) -> dict:
+    # resolve at CALL time so monkeypatching module attributes works (a
+    # default-arg binding would freeze the original function and make tests
+    # environment-dependent)
+    if reachable_check is None:
+        reachable_check = _port_open
     from .audit import AuditLog
     from .cli_agent import FULL_PRESET, _make_client
     from .findings import extract_findings

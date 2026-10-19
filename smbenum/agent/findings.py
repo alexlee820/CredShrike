@@ -44,6 +44,7 @@ EXTRACTION_PROMPT = (
 # DOMAIN\user tokens in the final report = what the extraction MUST cover
 _DOMAIN_USER_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_.-]{1,30})\\([A-Za-z][A-Za-z0-9_.$-]{1,30})\b")
 _PLACEHOLDER_USERNAMES = {"", "—", "-", "none", "null", "n/a", "user", "username"}
+_SEV_ORDER = {"high": 3, "medium": 2, "low": 1}
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -116,18 +117,11 @@ def _expected_usernames(messages: list[dict]) -> set[str]:
     return expected
 
 
-def extract_findings(client, policy, messages: list[dict]) -> list[dict]:
-    """Follow-up call(s) over the finished conversation → sanitized findings.
-    Two safety nets: (a) parse-retry on invalid JSON, (b) completeness
-    cross-check — if the final report names DOMAIN\\user accounts the JSON
-    omitted, ONE corrective round is issued listing exactly who was missed
-    (this catches the real-world failure where 'net use /user:U P' style
-    credentials got dropped from the extraction)."""
+def _extraction_call(client, policy, messages: list[dict]) -> tuple[list[dict], str]:
+    """One extraction pass with a parse-retry. Returns (findings, raw_text)."""
     prompt_messages = list(messages) + [{"role": "user", "content": EXTRACTION_PROMPT}]
     last_error: Optional[str] = None
-    findings: list[dict] = []
-    corrective = False
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             resp = client.messages.create(
                 model=policy.model,
@@ -135,24 +129,7 @@ def extract_findings(client, policy, messages: list[dict]) -> list[dict]:
                 messages=prompt_messages,
             )
             text = "".join(getattr(b, "text", "") for b in resp.content)
-            findings = _sanitize(_parse_findings_json(text))
-            if corrective:
-                return findings          # corrective round parsed — done
-            missing = _expected_usernames(messages) - {
-                (f.get("username") or "").split("\\")[-1].lower() for f in findings}
-            if not missing or attempt == 2:
-                return findings
-            corrective = True
-            # corrective round: name exactly who was omitted
-            prompt_messages = prompt_messages + [
-                {"role": "assistant", "content": text[:4000]},
-                {"role": "user", "content":
-                    f"Your JSON omitted credentials for: {', '.join(sorted(missing))}. "
-                    f"They ARE in the final report. Re-emit the COMPLETE findings "
-                    f"JSON (all previous entries PLUS the missing ones), same schema, "
-                    f"raw JSON only."},
-            ]
-            continue
+            return _sanitize(_parse_findings_json(text)), text
         except Exception as exc:  # noqa: BLE001 - parse or API error
             last_error = f"{type(exc).__name__}: {exc}"
             prompt_messages = prompt_messages + [
@@ -161,6 +138,74 @@ def extract_findings(client, policy, messages: list[dict]) -> list[dict]:
                                             f"({last_error[:200]}). Respond with ONLY "
                                             f"the raw JSON object, no prose, no fence."},
             ]
-    if findings:
+    raise RuntimeError(f"extraction call failed: {last_error}")
+
+
+def _merge_passes(passes: list[list[dict]]) -> list[dict]:
+    """Union of two independent extraction passes, deduplicated:
+    credentials by (username, secret) — severity takes the max, evidence
+    joined; everything else by (category, host, share, path)."""
+    out: dict[tuple, dict] = {}
+    for findings in passes:
+        for f in findings:
+            if f["category"] == "credential" and (f.get("username") or f.get("secret")):
+                key = ("cred", (f.get("username") or "").lower(), f.get("secret") or "")
+            else:
+                key = ("other", f["category"], f.get("host"), f.get("share"), f.get("path"))
+            if key in out:
+                merged = out[key]
+                if _SEV_ORDER.get(f["severity"], 0) > _SEV_ORDER.get(merged["severity"], 0):
+                    merged["severity"] = f["severity"]
+                if f.get("evidence") and f["evidence"] not in merged.get("evidence", ""):
+                    merged["evidence"] = (merged.get("evidence", "") + "; " + f["evidence"])[:400]
+                for field in ("note", "share", "path"):
+                    if not merged.get(field) and f.get(field):
+                        merged[field] = f[field]
+            else:
+                out[key] = dict(f)
+    return list(out.values())
+
+
+def extract_findings(client, policy, messages: list[dict]) -> list[dict]:
+    """Robust extraction: TWO independent LLM passes unioned (each pass can
+    randomly omit items — the union catches what either missed), then the
+    regex cross-check against the final report's DOMAIN\\user tokens; any
+    account still missing after the union triggers ONE corrective round."""
+    passes: list[list[dict]] = []
+    texts: list[str] = []
+    errors: list[str] = []
+    for _ in range(2):
+        try:
+            findings, text = _extraction_call(client, policy, messages)
+            passes.append(findings)
+            texts.append(text)
+        except Exception as exc:  # noqa: BLE001 - one pass failing is survivable
+            errors.append(str(exc))
+    if not passes:
+        raise RuntimeError(f"both extraction passes failed: {' | '.join(errors)}")
+    findings = _merge_passes(passes)
+
+    missing = _expected_usernames(messages) - {
+        (f.get("username") or "").split("\\")[-1].lower() for f in findings}
+    if not missing:
         return findings
-    raise RuntimeError(f"findings extraction failed after retry: {last_error}")
+
+    # corrective round over the union: name exactly who is still absent
+    corrective_prompt = list(messages) + [
+        {"role": "user", "content": EXTRACTION_PROMPT},
+        {"role": "assistant", "content": (texts[0] if texts else "")[:4000]},
+        {"role": "user", "content":
+            f"The extraction omitted credentials for: {', '.join(sorted(missing))}. "
+            f"They ARE in the final report. Re-emit the COMPLETE findings JSON "
+            f"(all previous entries PLUS the missing ones), same schema, raw JSON only."},
+    ]
+    try:
+        resp = client.messages.create(
+            model=policy.model,
+            max_tokens=min(policy.max_tokens, 16384),
+            messages=corrective_prompt,
+        )
+        text = "".join(getattr(b, "text", "") for b in resp.content)
+        return _merge_passes([findings, _sanitize(_parse_findings_json(text))])
+    except Exception:  # noqa: BLE001 - union result is still the best we have
+        return findings
