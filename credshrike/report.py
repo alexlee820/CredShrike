@@ -154,19 +154,25 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
     def tile(label: str, value) -> str:
         return f"<div class='tile'><b>{value}</b><span>{label}</span></div>"
 
+    _SEV_RANK = {"high": 0, "medium": 1, "low": 2}
+
+    def _sort_findings(items):
+        return sorted(items, key=lambda f: (_SEV_RANK.get(f.get("severity", "low"), 3),
+                                            f.get("category", "")))
+
     creds_rows = "".join(
         f"<tr><td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
         f"<td>{_esc(f.get('username') or '—')}</td>{_secret_cell(f.get('secret'))}"
         f"<td class='path'>{_esc(f.get('host'))}/{_esc(f.get('share'))}/{_esc(f.get('path'))}</td>"
         f"<td class='dim ev'>{_esc_cap(f.get('evidence'))}</td></tr>"
-        for f in cred_findings) or "<tr><td colspan='5' class='dim'>none</td></tr>"
+        for f in _sort_findings(cred_findings)) or "<tr><td colspan='5' class='dim'>none</td></tr>"
 
     findings_rows = "".join(
         f"<tr><td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
         f"<td>{_esc(f['category'])}</td>"
         f"<td class='path'>{_esc(f.get('host'))}/{_esc(f.get('share'))}/{_esc(f.get('path'))}</td>"
         f"<td>{_esc_cap(f.get('note'))}</td><td class='dim ev'>{_esc_cap(f.get('evidence'))}</td></tr>"
-        for f in findings) or "<tr><td colspan='5' class='dim'>none</td></tr>"
+        for f in _sort_findings(findings)) or "<tr><td colspan='5' class='dim'>none</td></tr>"
 
     hits_rows = "".join(
         f"<tr><td class='tier {h.get('tier')}'>{_esc(h.get('tier'))}</td>"
@@ -414,9 +420,29 @@ def write_report(path: str, **kwargs) -> str:
 # --------------------------------------------------------------------------- #
 # domain-sweep index (full-domain preset)
 # --------------------------------------------------------------------------- #
+    _SEV_IDX = {"high": 0, "medium": 1, "low": 2}
+
+    def _sort_creds(items):
+        return sorted(items, key=lambda f: (_SEV_IDX.get(f.get("severity", "low"), 3),
+                                            f.get("username") or ""))
+
+    def _sort_others(items):
+        return sorted(items, key=lambda f: (_SEV_IDX.get(f.get("severity", "low"), 3),
+                                            f.get("category", "")))
+
+
 def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
                             computers: list) -> str:
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    _SEV_RANK_IDX = {"high": 0, "medium": 1, "low": 2}
+
+    def _sort_creds(items):
+        return sorted(items, key=lambda f: (_SEV_RANK_IDX.get(f.get("severity", "low"), 3),
+                                            f.get("username") or ""))
+
+    def _sort_others(items):
+        return sorted(items, key=lambda f: (_SEV_RANK_IDX.get(f.get("severity", "low"), 3),
+                                            f.get("category", "")))
     status_colors = {"done": "#43d17c", "unreachable": "#7d8a99",
                      "error": "#ff6b6b", "skipped-budget": "#ffb84d"}
 
@@ -440,7 +466,7 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
         for h in hosts)
 
     cred_rows = ""
-    for f in merged.get("credentials", []):
+    for f in _sort_creds(merged.get("credentials", [])):
         locations = "; ".join(f"{_esc(l['host'])}/{_esc(l['share'])}/{_esc(l['path'])}"
                               for l in f.get("locations", []))
         hosts_attr = " ".join(sorted({l["host"] for l in f.get("locations", [])}))
