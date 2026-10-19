@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import ntpath
+import os
+import tempfile
 from typing import Optional
 
 from impacket import smb, smb3
@@ -43,6 +45,22 @@ SHARE_TYPE_NAMES = {0x00000000: "DISK", 0x00000001: "PRINT", 0x00000002: "DEVICE
 # --------------------------------------------------------------------------- #
 # auth dispatch
 # --------------------------------------------------------------------------- #
+def _ticket_ccache_path(credential: Credential) -> str:
+    """Return a .ccache FILE path for the credential's ticket (.kirbi is
+    converted to a temp ccache). impacket's battle-tested ticket path is
+    KRB5CCNAME + kerberosLogin(useCache=True) — passing TGT dicts directly
+    breaks against Server 2022 (session-setup continuation)."""
+    path = credential.ticket_path
+    if path.lower().endswith(".kirbi"):
+        ccache = load_ticket(path)
+        from .krbutil import ccache_to_bytes
+        fd, tmp = tempfile.mkstemp(prefix="smbenum_tkt_", suffix=".ccache")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(ccache_to_bytes(ccache))
+        return tmp
+    return os.path.abspath(path)
+
+
 def login_smb(conn: SMBConnection, credential: Credential, spn_host: Optional[str] = None) -> None:
     """Authenticate an SMBConnection according to the credential type."""
     credential.validate()
@@ -55,13 +73,23 @@ def login_smb(conn: SMBConnection, credential: Credential, spn_host: Optional[st
         conn.kerberosLogin(user, "", domain, aesKey=credential.aes_key,
                            kdcHost=credential.kdc_host or None, useCache=False)
     elif credential.auth_type is AuthType.TICKET:
-        ccache = load_ticket(credential.ticket_path)
-        host_for_spn = spn_host or conn.getRemoteName()
-        tgt_domain, tgt_user, tgt, tgs = extract_for_spn(
-            ccache, domain, user, "cifs/%s" % host_for_spn.split(":")[0])
-        conn.kerberosLogin(tgt_user or user, "", tgt_domain or domain,
-                           kdcHost=credential.kdc_host or None,
-                           TGT=tgt, TGS=tgs, useCache=False)
+        ccache_path = _ticket_ccache_path(credential)
+        saved = os.environ.get("KRB5CCNAME")
+        os.environ["KRB5CCNAME"] = ccache_path
+        try:
+            conn.kerberosLogin("", "", domain or " ", kdcHost=credential.kdc_host or None,
+                               useCache=True)
+        finally:
+            if saved is None:
+                os.environ.pop("KRB5CCNAME", None)
+            else:
+                os.environ["KRB5CCNAME"] = saved
+            if ccache_path.startswith(tempfile.gettempdir()) and \
+                    "smbenum_tkt_" in ccache_path:
+                try:
+                    os.unlink(ccache_path)
+                except OSError:
+                    pass
     else:  # pragma: no cover - enum exhaustiveness
         raise ValueError(f"unsupported auth type {credential.auth_type}")
 

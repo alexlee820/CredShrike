@@ -164,18 +164,27 @@ def test_login_aes(fake_conn):
     assert fake_conn.kerberos_calls[0]["kdcHost"] == "dc01"
 
 
-def test_login_ticket(fake_conn, monkeypatch):
-    def fake_extract(ccache, domain="", username="", spn=""):
-        assert spn.startswith("cifs/filesrv01.corp.local")
-        return "CORP.LOCAL", "jdoe", ("TGT-blob", "key"), None
+def test_login_ticket(fake_conn, monkeypatch, tmp_path):
+    """Ticket auth goes through KRB5CCNAME + kerberosLogin(useCache=True) —
+    impacket's battle-tested path (TGT dicts break on Server 2022)."""
+    import os
+    ccache_file = tmp_path / "t.ccache"
+    ccache_file.write_bytes(b"\x05\x04rest")
+    cred = Credential.from_args("ticket", "ignored", "corp.local",
+                                ticket=str(ccache_file), kdc="dc01")
+    seen_env = {}
 
-    monkeypatch.setattr(mod, "load_ticket", lambda path: object())
-    monkeypatch.setattr(mod, "extract_for_spn", fake_extract)
-    cred = Credential.from_args("ticket", "ignored", "corp.local", ticket="t.ccache")
+    def fake_login(user, password, domain="", **kw):
+        seen_env["krb5ccname"] = os.environ.get("KRB5CCNAME")
+        seen_env["call"] = {"user": user, "domain": domain, **kw}
+
+    fake_conn.kerberosLogin = fake_login
+    saved_env = os.environ.get("KRB5CCNAME")
     login_smb(fake_conn, cred, spn_host="filesrv01.corp.local")
-    call = fake_conn.kerberos_calls[0]
-    assert call["user"] == "jdoe" and call["domain"] == "CORP.LOCAL"
-    assert call["TGT"] == ("TGT-blob", "key") and call["TGS"] is None
+    assert seen_env["krb5ccname"] == str(ccache_file.resolve())  # set during login
+    assert os.environ.get("KRB5CCNAME") == saved_env              # restored after
+    call = seen_env["call"]
+    assert call["useCache"] is True and call["kdcHost"] == "dc01"
 
 
 # --------------------------------------------------------------------------- #

@@ -175,34 +175,17 @@ def ccache_to_bytes(ccache: CCache) -> bytes:
     return data
 
 
-def ccache_from_tgt(tgt_blob: bytes, session_key, username: str, domain: str) -> CCache:
+def ccache_from_tgt(tgt_blob: bytes, client_key, session_key,
+                    username: str, domain: str) -> CCache:
     """Build an in-memory CCache holding one TGT credential from
-    ``getKerberosTGT`` output (AS_REP bytes + crypto.Key session key).
-
-    Used to feed AES-key credentials into consumers that read KRB5CCNAME
-    (e.g. the vendored ADWS NegotiateStream client)."""
-    realm = domain.upper()
-    cred = Credential()
-    cred["client"] = _build_principal(realm, 1, username)
-    cred["server"] = _build_principal(realm, 2, f"krbtgt/{realm}")
-    kb = KeyBlockV4()
-    kb["keytype"] = session_key.enctype
-    kb["etype"] = session_key.enctype
-    kb["keylen"] = len(session_key.contents)
-    kb["keyvalue"] = bytes(session_key.contents)
-    cred["key"] = kb
-    cred["time"] = Times()
-    octets = CountedOctetString()
-    octets["length"] = len(tgt_blob)
-    octets["data"] = tgt_blob
-    cred.ticket = octets
-    cred.secondTicket = CountedOctetString()
-    cred.secondTicket["length"] = 0
-    cred.secondTicket["data"] = b""
+    ``getKerberosTGT`` output. NOTE impacket returns
+    ``(as_rep, cipher, oldSessionKey, sessionKey)`` where oldSessionKey is
+    the CLIENT key (used to decrypt the AS-REP enc-part) — fromTGT needs
+    both. Storing the raw AS_REP as the ticket blob (instead of going
+    through fromTGT) breaks ticket reuse, since toTGT() expects the inner
+    Ticket DER."""
     ccache = CCache()
-    ccache.headers = []
-    ccache.principal = cred["client"]
-    ccache.credentials = [cred]
+    ccache.fromTGT(tgt_blob, client_key, session_key)
     return ccache
 
 

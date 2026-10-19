@@ -107,9 +107,10 @@ class AdwsSource:
             from impacket.krb5 import constants
             user = krb5_types.Principal(cred.username,
                                         type=constants.PrincipalNameType.NT_PRINCIPAL.value)
-            tgt_blob, _cipher, _old, session_key = getKerberosTGT(
+            tgt_blob, _cipher, client_key, session_key = getKerberosTGT(
                 user, "", cred.domain, "", "", cred.aes_key, cred.kdc_host or None)
-            ccache = ccache_from_tgt(tgt_blob, session_key, cred.username, cred.domain)
+            ccache = ccache_from_tgt(tgt_blob, client_key, session_key,
+                                     cred.username, cred.domain)
         fd, path = tempfile.mkstemp(prefix="smbenum_adws_", suffix=".ccache")
         with os.fdopen(fd, "wb") as fh:
             fh.write(ccache_to_bytes(ccache))
