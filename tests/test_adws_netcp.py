@@ -6,13 +6,13 @@ import base64 as b64
 import struct
 import xml.etree.ElementTree as ET
 
-from smbenum.credentials import Credential
-from smbenum.domain.adws.encoder import Encoder
-from smbenum.domain.adws.ms_nmf import NMFSizedEnvelope
-from smbenum.domain.adws.soap_templates import LDAP_QUERY_FSTRING, LDAP_ROOT_DSE_FSTRING
-import smbenum.domain.adws_source as adws_mod
-from smbenum.domain.adws_source import AdwsSource, _release_envelope
-from smbenum.domain.adws import NTLMAuth
+from credshrike.credentials import Credential
+from credshrike.domain.adws.encoder import Encoder
+from credshrike.domain.adws.ms_nmf import NMFSizedEnvelope
+from credshrike.domain.adws.soap_templates import LDAP_QUERY_FSTRING, LDAP_ROOT_DSE_FSTRING
+import credshrike.domain.adws_source as adws_mod
+from credshrike.domain.adws_source import AdwsSource, _release_envelope
+from credshrike.domain.adws import NTLMAuth
 
 NS_AD = "http://schemas.microsoft.com/2008/1/ActiveDirectory"
 NS_ADDATA = f"{NS_AD}/Data"

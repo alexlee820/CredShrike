@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from smbenum.agent.audit import AuditLog, redact
-from smbenum.agent.executor import ToolExecutor, normalize_path
-from smbenum.agent.session import AgentSession
-from smbenum.agent.tools import REGISTRY, anthropic_tools
-from smbenum.config import Policy
-from smbenum.credentials import Credential
+from credshrike.agent.audit import AuditLog, redact
+from credshrike.agent.executor import ToolExecutor, normalize_path
+from credshrike.agent.session import AgentSession
+from credshrike.agent.tools import REGISTRY, anthropic_tools
+from credshrike.config import Policy
+from credshrike.credentials import Credential
 
 
 # --------------------------------------------------------------------------- #
@@ -186,7 +186,7 @@ def test_full_loop_with_tool_use_and_final_report(session):
         SimpleNamespace(stop_reason="end_turn", content=[_text("## Findings\n- IT share exposed")]),
     ]))
 
-    from smbenum.agent.loop import AgentLoop
+    from credshrike.agent.loop import AgentLoop
     loop = AgentLoop(client, session, session.policy, session.audit)
     result = loop.run("check the IT share")
 
@@ -236,7 +236,7 @@ def test_budget_exhaustion_forces_final_summary(session):
                                             "share": "IT", "path": ""})]),
         SimpleNamespace(stop_reason="end_turn", content=[_text("final partial report")]),
     ]))
-    from smbenum.agent.loop import AgentLoop
+    from credshrike.agent.loop import AgentLoop
     loop = AgentLoop(client, session, session.policy, session.audit)
     result = loop.run("audit everything")
     assert result == "final partial report"
@@ -388,7 +388,7 @@ def test_no_redact_rules_is_noop(session):
 # domain source selection (session default vs per-call override)
 # --------------------------------------------------------------------------- #
 def test_domain_source_session_default_and_override(session):
-    from smbenum.domain.base import ComputerRecord
+    from credshrike.domain.base import ComputerRecord
     captured = {}
 
     class FakeSource:
@@ -403,7 +403,7 @@ def test_domain_source_session_default_and_override(session):
 
     session.directory = fake_directory
 
-    from smbenum.agent.tools import REGISTRY
+    from credshrike.agent.tools import REGISTRY
     tool = REGISTRY["domain_list_computers"]
     # no per-call source -> session default (e.g. adws chosen in UI/CLI)
     session.domain_source = "adws"
@@ -425,7 +425,7 @@ def test_loop_captures_transcript(session):
                                            {"host": "filesrv01.corp.local"})]),
         SimpleNamespace(stop_reason="end_turn", content=[_text("## final report")]),
     ]))
-    from smbenum.agent.loop import AgentLoop
+    from credshrike.agent.loop import AgentLoop
     loop = AgentLoop(client, session, session.policy, session.audit)
     loop.run("check the shares")
 
@@ -468,7 +468,7 @@ def test_debug_mode_captures_and_echoes_full_results(session):
                                            {"host": "filesrv01.corp.local"})]),
         SimpleNamespace(stop_reason="end_turn", content=[_text("done")]),
     ]))
-    from smbenum.agent.loop import AgentLoop
+    from credshrike.agent.loop import AgentLoop
     loop = AgentLoop(client, session, session.policy, session.audit,
                      echo=echo_lines.append)
     loop.run("check")
@@ -510,7 +510,7 @@ def test_context_tracking_and_ratio_compaction(session):
         # second call reports 600 input tokens -> over 50% of 1000 -> compact
         _resp("final", input_tokens=600),
     ]))
-    from smbenum.agent.loop import AgentLoop
+    from credshrike.agent.loop import AgentLoop
     loop = AgentLoop(client, session, session.policy, session.audit,
                      echo=lambda l: None)
     # seed one old tool_result big enough to be compacted (protect last 2 msgs)
@@ -534,7 +534,7 @@ def test_context_overflow_self_heals(session):
                 raise RuntimeError("Error code: 400 - prompt is too long for this model")
             return _resp("recovered", input_tokens=100)
 
-    from smbenum.agent.loop import AgentLoop
+    from credshrike.agent.loop import AgentLoop
     loop = AgentLoop(SimpleNamespace(messages=Heal()), session, session.policy,
                      session.audit, echo=lambda l: None)
     loop.messages = [{"role": "user", "content": [
@@ -559,7 +559,7 @@ def test_goal_survives_compaction(session):
                                             "share": "IT", "path": ""})]),
         _resp("final", input_tokens=900),
     ]))
-    from smbenum.agent.loop import AgentLoop
+    from credshrike.agent.loop import AgentLoop
     loop = AgentLoop(client, session, session.policy, session.audit, echo=lambda l: None)
     out = loop.run("FIND THE GOLDEN PASSWORD")
     assert out == "final"

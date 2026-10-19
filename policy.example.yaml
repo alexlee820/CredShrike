@@ -1,8 +1,8 @@
-# smbenum agent policy — every cap the executor enforces.
+# credshrike agent policy — every cap the executor enforces.
 # Copy to lab.yaml and adapt; the `profiles` section feeds `--profile`.
 
 # ---------------------------------------------------------------- profiles
-# pick with: smbenum agent --profile lab.yaml
+# pick with: credshrike agent --profile lab.yaml
 profiles:
   corp-ntlm:
     auth_type: ntlm

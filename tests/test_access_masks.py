@@ -1,4 +1,4 @@
-from smbenum.acl import decode_access_mask, decode_share_permissions, summarize_rights
+from credshrike.acl import decode_access_mask, decode_share_permissions, summarize_rights
 
 
 def test_read_mask_decodes():

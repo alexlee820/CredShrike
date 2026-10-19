@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CredShrike agent console</title>
+<style>
+  :root { --bg:#101418; --panel:#171d24; --line:#26303a; --fg:#cdd6e0; --dim:#7d8a99;
+          --acc:#4da3ff; --ok:#43d17c; --warn:#ffb84d; --err:#ff6b6b; --hit:#ffd166; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 "Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; justify-content:space-between;
+    padding:10px 24px; border-bottom:1px solid var(--line); }
+  header .tag { color:var(--dim); font-size:12px; width:240px; }
+  header .tag.right { text-align:right; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.5px; text-align:center; flex:1; }
+
+  main { display:grid; grid-template-columns:1fr 1fr; gap:16px;
+    max-width:1400px; margin:16px auto; padding:0 20px; align-items:stretch; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:16px; display:flex; flex-direction:column; }
+  .panel h2 { font-size:13px; margin:0 0 12px; color:var(--acc);
+    text-transform:uppercase; letter-spacing:1px; text-align:center; }
+
+  /* symmetric two-column form grid */
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; }
+  .field { display:flex; flex-direction:column; min-width:0; }
+  .field.full { grid-column:1 / -1; }
+  label { font-size:12px; color:var(--dim); margin:0 0 3px; }
+  input, select, textarea { width:100%; background:#0d1117; color:var(--fg);
+    border:1px solid var(--line); border-radius:6px; padding:7px 9px; font:inherit; }
+  input:focus, select:focus, textarea:focus { outline:1px solid var(--acc); }
+  textarea { resize:vertical; }
+  #goal { min-height:64px; } #followup { min-height:44px; } #redactPatterns { min-height:48px; }
+
+  hr { border:0; border-top:1px solid var(--line); margin:12px 0; }
+  summary { color:var(--dim); font-size:12px; cursor:pointer; text-align:center; }
+
+  button { background:var(--acc); border:0; color:#08121d; font-weight:600;
+    border-radius:6px; padding:9px 14px; cursor:pointer; margin-top:12px; width:100%; }
+  button.secondary { background:#22303d; color:var(--fg); }
+  button:hover { filter:brightness(1.1); }
+  .htmllink { display:block; text-align:center; margin-top:8px; color:var(--acc);
+    font-size:13px; text-decoration:none; padding:8px; border:1px dashed var(--line);
+    border-radius:6px; }
+  .btnrow { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .btnrow button { margin-top:12px; }
+  .hint { font-size:11px; color:var(--dim); margin-top:8px; text-align:center; }
+
+  /* right panel: symmetric blocks */
+  #empty { color:var(--dim); text-align:center; margin:auto 0; padding:60px 0; }
+  .kv { display:flex; gap:16px; flex-wrap:wrap; justify-content:center;
+    font-size:12px; color:var(--dim); margin:2px 0 6px; }
+  .kv b { color:var(--fg); font-weight:600; }
+  .bar { height:6px; background:#0d1117; border-radius:4px; overflow:hidden; margin:0 0 10px; }
+  .bar > i { display:block; height:100%; background:var(--acc); width:0;
+    transition:width .4s; }
+
+  #live { background:#0b0f13; border:1px solid var(--line); border-radius:8px;
+    padding:10px 12px; height:300px; overflow-y:auto;
+    font:12px/1.5 Consolas,monospace; white-space:pre-wrap; }
+  #live .hit { color:var(--hit); }
+  #live .err { color:var(--err); }
+  #live .call { color:var(--acc); }
+  #live .walk { color:var(--dim); }
+
+  .bottom { display:grid; grid-template-columns:2fr 1fr; gap:12px; margin-top:12px;
+    flex:1; min-height:0; }
+  .cell { display:flex; flex-direction:column; min-height:0; }
+  .cell label { margin-bottom:4px; }
+  #report, #flagged { background:#0b0f13; border:1px solid var(--line); border-radius:8px;
+    padding:10px 12px; overflow-y:auto; white-space:pre-wrap;
+    font:12px/1.5 Consolas,monospace; flex:1; }
+  #report { max-height:360px; }
+  #flagged { color:var(--warn); font-size:11px; }
+
+  .status { font-size:12px; padding:2px 10px; border-radius:10px; white-space:nowrap; }
+  .status.running { background:#20344a; color:var(--acc); }
+  .status.done { background:#16351f; color:var(--ok); }
+  .status.error { background:#3d1c1c; color:var(--err); }
+  .status.stopped { background:#3a2f16; color:var(--warn); }
+  .hidden { display:none !important; }
+  /* overflow guards: grid items default to min-width:auto — one long log
+     line would blow the whole layout to 30000px+ */
+  .panel, #live, #report, #flagged, .kv, .bar, .bottom .cell { min-width:0; }
+  #live div { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+  #report, #flagged { overflow-wrap:anywhere; word-break:break-word; }
+</style>
+</head>
+<body>
+<header>
+  <span class="tag">read-only enumeration agent</span>
+  <h1>CredShrike · agent console</h1>
+  <span class="tag right">local only · audit in runs/<span id="runBadgeWrap"></span></span>
+</header>
+<main>
+  <!-- ==================== left: setup (symmetric 2-col form) ============ -->
+  <section class="panel" id="setup">
+    <h2>New run</h2>
+    <div class="grid2">
+      <div class="field"><label>Preset</label>
+        <select id="preset">
+          <option value="full-domain">full-domain — per-computer sweep (default)</option>
+          <option value="full">full — dump EVERY file, AI reviews all</option>
+          <option value="snaffler">snaffler — tier/regex sweep + judgment</option>
+          <option value="custom">custom goal</option>
+        </select>
+      </div>
+      <div class="field"><label>Directory source</label>
+        <select id="domainSource">
+          <option value="auto">auto (LDAP)</option>
+          <option value="ldap">ldap — 389</option>
+          <option value="adws">adws — net.tcp 9389</option>
+        </select>
+      </div>
+      <div class="field full" id="goalWrap"><label>Goal</label>
+        <textarea id="goal" placeholder="audit the IT share for credentials and weak ACLs"></textarea>
+      </div>
+      <div class="field"><label>Host(s) — comma sep · empty = all</label>
+        <input id="host" placeholder="filesrv01.corp.local"/></div>
+      <div class="field"><label>DC (domain queries)</label>
+        <input id="dc" placeholder="dc01.corp.local"/></div>
+      <div class="field"><label>Auth type</label>
+        <select id="authType">
+          <option>password</option><option>ntlm</option><option>aes</option><option>ticket</option>
+        </select>
+      </div>
+      <div class="field"><label>Model</label><input id="model" placeholder="claude-opus-5"/></div>
+      <div class="field"><label>Username</label><input id="username" placeholder="svc-scan"/></div>
+      <div class="field"><label>Domain</label><input id="domain" placeholder="corp.local"/></div>
+      <div class="field"><label>API endpoint (optional — Anthropic-compatible)</label>
+        <input id="apiBaseUrl" placeholder="https://api.deepseek.com/anthropic"/></div>
+      <div class="field"><label>API key (optional — else ANTHROPIC_API_KEY)</label>
+        <input id="apiKey" type="password" placeholder="sk-..."/></div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="debugMode" style="width:auto"/>
+        <label style="margin:0" for="debugMode">Debug — show FULL tool results
+          (verify adws/ldap via "source", inspect dump pages)</label>
+      </div>
+    </div>
+
+    <div id="authFields">
+      <div id="f_password" class="grid2">
+        <div class="field full"><label>Password</label><input id="password" type="password"/></div>
+      </div>
+      <div id="f_ntlm" class="grid2 hidden">
+        <div class="field full"><label>Hashes LM:NT</label><input id="hashes" placeholder=":31d6cfe0..."/></div>
+      </div>
+      <div id="f_aes" class="grid2 hidden">
+        <div class="field"><label>AES key (hex)</label><input id="aesKey"/></div>
+        <div class="field"><label>KDC (optional)</label><input id="kdc"/></div>
+      </div>
+      <div id="f_ticket" class="grid2 hidden">
+        <div class="field full"><label>Ticket file (.ccache / .kirbi)</label><input id="ticket"/></div>
+      </div>
+    </div>
+
+    <hr/>
+    <details>
+      <summary>read gate &amp; redaction</summary>
+      <div class="grid2" style="margin-top:10px">
+        <div class="field"><label>Read gate</label>
+          <select id="readGate"><option value="">policy default</option>
+            <option value="none">none</option><option value="ai">ai (token est.)</option>
+            <option value="size">size (real size)</option></select></div>
+        <div class="field"><label>Gate value (tokens / MB)</label><input id="gateValue"/></div>
+        <div class="field full"><label>Redact literals — comma separated</label>
+          <input id="redact" placeholder="ProjectX,10.0.0.5"/></div>
+        <div class="field full"><label>Redact regex — one per line</label>
+          <textarea id="redactPatterns" placeholder="password\s*=\s*(\S+)"></textarea></div>
+        <div class="field full"><label>Context limit (tokens — 0 = off; GLM ≈ 128000; auto-compacts old tool results at 75%)</label>
+          <input id="contextLimit" type="number" placeholder="128000"/></div>
+        <div class="field"><label>Computers LDAP filter (full-domain, optional)</label>
+          <input id="computersFilter" placeholder="(operatingSystem=*Server*)"/></div>
+        <div class="field"><label>Max hosts (full-domain, 0 = all)</label>
+          <input id="maxHosts" type="number" placeholder="0"/></div>
+      </div>
+    </details>
+
+    <button id="startBtn">Start run</button>
+    <div class="hint">Credentials stay on this machine · server binds 127.0.0.1</div>
+  </section>
+
+  <!-- ==================== right: monitor (symmetric blocks) ============== -->
+  <section class="panel" id="monitor">
+    <h2>Run monitor <span id="ctxLine" class="tag" style="text-transform:none"></span></h2>
+    <div id="empty">No run yet — configure on the left and press Start.</div>
+    <div id="runView" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      <div class="kv" id="kv"></div>
+      <div class="bar"><i id="budgetBar"></i></div>
+      <button class="secondary hidden" id="showMoreBtn"
+              style="margin:6px 0">▲ show more (0 older)</button>
+      <div id="live"></div>
+      <div class="btnrow">
+        <button class="secondary" id="stopBtn">Stop</button>
+        <button class="secondary" id="followBtn">Send follow-up</button>
+      </div>
+      <a id="reportHtmlBtn" class="htmllink hidden" href="#" target="_blank">⬇ Open HTML report</a>
+      <div class="field full" style="margin-top:2px"><label>Follow-up goal (same conversation &amp; budgets)</label>
+        <textarea id="followup"></textarea></div>
+      <div class="bottom">
+        <div class="cell"><label>Report</label><div id="report">—</div></div>
+        <div class="cell"><label>Flagged</label><div id="flagged">—</div></div>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+let runId = null, timer = null, allLines = [], visibleCount = 100;
+
+const $ = id => document.getElementById(id);   // MUST precede all $() uses (TDZ)
+
+$('showMoreBtn').onclick = () => { visibleCount += 500; renderLive(); };
+
+$('authType').onchange = () => {
+  const t = $('authType').value;
+  for (const f of ['f_password','f_ntlm','f_aes','f_ticket']) $(f).classList.add('hidden');
+  $('f_' + t).classList.remove('hidden');
+};
+function syncGoalVisibility() {
+  $('goalWrap').style.display =
+    ['snaffler','full','full-domain'].includes($('preset').value) ? 'none' : '';
+}
+$('preset').onchange = syncGoalVisibility;
+syncGoalVisibility();   // page load: default preset (full-domain) hides Goal too
+
+$('startBtn').onclick = async () => {
+  const params = {
+    preset: ['snaffler','full'].includes($('preset').value) ? $('preset').value : '',
+    goal: $('goal').value.trim(),
+    host: $('host').value.trim(), dc: $('dc').value.trim(),
+    domain_source: $('domainSource').value,
+    auth_type: $('authType').value, username: $('username').value.trim(),
+    domain: $('domain').value.trim(),
+    password: $('password').value, hashes: $('hashes').value.trim(),
+    aes_key: $('aesKey').value.trim(), ticket: $('ticket').value.trim(), kdc: $('kdc').value.trim(),
+    read_gate: $('readGate').value,
+    max_read_tokens: $('readGate').value === 'ai' ? $('gateValue').value : '',
+    flag_oversize_mb: $('readGate').value === 'size' ? $('gateValue').value : '',
+    redact: $('redact').value.trim(),
+    redact_patterns: $('redactPatterns').value.split('\n').map(s => s.trim()).filter(Boolean),
+    model: $('model').value.trim(),
+    api_base_url: $('apiBaseUrl').value.trim(),
+    api_key: $('apiKey').value.trim(),
+    debug: $('debugMode').checked,
+    context_limit: $('contextLimit').value || 0,
+    computers_filter: $('computersFilter').value.trim(),
+    max_hosts: $('maxHosts').value || 0,
+  };
+  const r = await fetch('/api/runs', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(params)});
+  const j = await r.json();
+  runId = j.id; $('empty').classList.add('hidden'); $('runView').classList.remove('hidden');
+  $('live').innerHTML = ''; $('report').textContent = '—';
+  if (timer) clearInterval(timer);
+  timer = setInterval(poll, 1500); poll();
+};
+
+$('stopBtn').onclick = () => fetch(`/api/runs/${runId}/stop`, {method:'POST'});
+
+$('followBtn').onclick = async () => {
+  const goal = $('followup').value.trim(); if (!goal) return;
+  await fetch(`/api/runs/${runId}/goal`, {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({goal})});
+  $('followup').value = '';
+};
+
+function renderLive() {
+  const live = $('live');
+  const atBottom = live.scrollHeight - live.scrollTop - live.clientHeight < 60;
+  const shown = allLines.slice(-visibleCount);
+  live.innerHTML = shown.map(l => {
+    const cls = l.includes('★ HIT') || l.includes('hit(s)') ? 'hit'
+              : l.includes('!') || l.includes('ERROR') ? 'err'
+              : l.startsWith('  →') || l.startsWith('  ←') ? 'call'
+              : l.startsWith('  ⋮') ? 'walk' : '';
+    return `<div class="${cls}">${l.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`;
+  }).join('');
+  const older = allLines.length - shown.length;
+  const btn = $('showMoreBtn');
+  if (older > 0) {
+    btn.classList.remove('hidden');
+    btn.textContent = `▲ show more (${older} older)`;
+  } else btn.classList.add('hidden');
+  if (atBottom) live.scrollTop = live.scrollHeight;
+}
+
+async function poll() {
+  if (!runId) return;
+  const s = await (await fetch(`/api/runs/${runId}`)).json();
+  const badgeWrap = $('runBadgeWrap');
+  badgeWrap.innerHTML = `<span class="status ${s.status}">${s.status}</span>`;
+  if (s.context) $('ctxLine').textContent =
+    `${s.context.principal} · ${s.context.auth_type} · gate=${s.context.read_gate}` +
+    ` · dir=${s.context.domain_source} · ${s.context.model} @ ${s.context.endpoint}` +
+    (s.context.thinking === 'off' ? ' (thinking off)' : '');
+  allLines = s.lines || [];
+  renderLive();
+  if (s.budget) {
+    const pct = Math.min(100, 100 * s.budget.tool_calls / s.budget.max_tool_calls);
+    $('budgetBar').style.width = pct + '%';
+    const ctx = s.context_limit
+      ? `<span>context <b>${(s.context_tokens/1000).toFixed(1)}K/${(s.context_limit/1000).toFixed(0)}K</b></span>` : '';
+    $('kv').innerHTML =
+      `<span>calls <b>${s.budget.tool_calls}/${s.budget.max_tool_calls}</b></span>` +
+      `<span>read <b>${(s.budget.bytes_read/1024).toFixed(0)}/${(s.budget.max_total_read_bytes/1048576).toFixed(0)} MiB</b></span>` + ctx +
+      `<span>elapsed <b>${s.budget.elapsed_s}s</b></span>` +
+      `<span>redactions <b>${s.redactions}</b></span>` +
+      `<span>audit <b>${s.audit_path}</b></span>`;
+  }
+  if (s.report) $('report').textContent = s.report;
+  if (s.report_html) {
+    $('reportHtmlBtn').classList.remove('hidden');
+    $('reportHtmlBtn').href = `/api/runs/${runId}/report_html`;
+  }
+  $('flagged').textContent = (s.flagged || []).length
+    ? (s.flagged || []).map(f => `${f.path}\n${f.reason}`).join('\n\n') : '—';
+  if (s.error) { $('report').textContent = 'ERROR: ' + s.error; }
+}
+</script>
+</body>
+</html>

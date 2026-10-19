@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import smbenum.webapp as webapp
-from smbenum.webapp import app
+import credshrike.webapp as webapp
+from credshrike.webapp import app
 
 
 # --------------------------------------------------------------------------- #
@@ -56,7 +56,7 @@ def fake_client(monkeypatch):
     from test_agent import FakeSMB
     fake_smb = FakeSMB()
 
-    import smbenum.agent.session as session_mod
+    import credshrike.agent.session as session_mod
     original = session_mod.AgentSession.smb
 
     def patched(self, host):
@@ -153,7 +153,7 @@ def test_unknown_run_404(client):
 
 def test_index_served(client):
     html = client.get("/").get_data(as_text=True)
-    assert "smbenum" in html and "Start run" in html
+    assert "CredShrike" in html and "Start run" in html
 
 
 # --------------------------------------------------------------------------- #
@@ -172,11 +172,11 @@ def test_build_client_routes_to_custom_endpoint():
 
 
 def test_loop_omits_thinking_when_off():
-    from smbenum.config import Policy
-    from smbenum.agent.audit import AuditLog
-    from smbenum.agent.session import AgentSession
-    from smbenum.agent.loop import AgentLoop
-    from smbenum.credentials import Credential
+    from credshrike.config import Policy
+    from credshrike.agent.audit import AuditLog
+    from credshrike.agent.session import AgentSession
+    from credshrike.agent.loop import AgentLoop
+    from credshrike.credentials import Credential
     import tempfile, pathlib
     policy = Policy()
     policy.thinking_mode = "off"
@@ -198,7 +198,7 @@ def test_loop_omits_thinking_when_off():
 
 
 def test_custom_endpoint_disables_thinking_by_default():
-    from smbenum.config import Policy
+    from credshrike.config import Policy
     policy = Policy()
     webapp._apply_policy_overrides(policy, {"api_base_url": "https://x.example/anthropic"})
     assert policy.thinking_mode == "off"                    # auto-off on custom endpoint
@@ -222,11 +222,11 @@ def test_full_preset_goal(client, fake_client):
 
 def test_full_domain_webapp_path(client, monkeypatch):
     """Regression: the web full-domain branch must import the orchestrator
-    from the right package (smbenum.agent.orchestrator, not smbenum.orchestrator)."""
-    import smbenum.agent.orchestrator as orch
+    from the right package (credshrike.agent.orchestrator, not credshrike.orchestrator)."""
+    import credshrike.agent.orchestrator as orch
     from test_agent import FakeSMB
-    from smbenum.domain.base import ComputerRecord
-    import smbenum.agent.session as session_mod
+    from credshrike.domain.base import ComputerRecord
+    import credshrike.agent.session as session_mod
     monkeypatch.setattr(session_mod.AgentSession, "smb",
                         lambda self, host: FakeSMB())
     monkeypatch.setattr(orch, "_resolve_computers",
@@ -255,7 +255,7 @@ def test_full_domain_webapp_path(client, monkeypatch):
 def test_long_debug_lines_are_capped(client, fake_client):
     """Debug-mode tool results can be 40K+ chars per line — the API must cap
     them or the polling payload kills the browser."""
-    import smbenum.webapp as w
+    import credshrike.webapp as w
     state = w.RunState("x", {})
     state.push("x" * 40000)
     got = state.public()["lines"][0]
@@ -265,10 +265,10 @@ def test_long_debug_lines_are_capped(client, fake_client):
 def test_full_domain_per_host_links_served(client, monkeypatch):
     """Regression: the index's relative per-host hrefs resolve under the web
     route to /api/runs/<id>/<file> — that route must serve them."""
-    import smbenum.agent.orchestrator as orch
+    import credshrike.agent.orchestrator as orch
     from test_agent import FakeSMB
-    from smbenum.domain.base import ComputerRecord
-    import smbenum.agent.session as session_mod
+    from credshrike.domain.base import ComputerRecord
+    import credshrike.agent.session as session_mod
     monkeypatch.setattr(session_mod.AgentSession, "smb", lambda self, host: FakeSMB())
     monkeypatch.setattr(orch, "_resolve_computers",
                         lambda *a, **k: [ComputerRecord(cn="WS01", dns_name="ws01.corp.local")])
@@ -289,6 +289,6 @@ def test_full_domain_per_host_links_served(client, monkeypatch):
     m = re.search(r"href='([^']+\.report\.html)'", index)
     assert m, "no per-host link found in index"
     per_host = client.get(f"/api/runs/{run_id}/{m.group(1)}")
-    assert per_host.status_code == 200 and "smbenum" in per_host.get_data(as_text=True)
+    assert per_host.status_code == 200 and "CredShrike" in per_host.get_data(as_text=True)
     # traversal is refused
     assert client.get(f"/api/runs/{run_id}/..%5Csecret.txt").status_code in (400, 404)

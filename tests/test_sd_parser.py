@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from smbenum.acl import (parse_security_descriptor, sid_to_bytes, parse_sid,
+from credshrike.acl import (parse_security_descriptor, sid_to_bytes, parse_sid,
                          effective_ace_list, is_everyone_readable, SDParseError)
 
 OWNER = "S-1-5-21-1111111111-2222222222-3333333333-1104"   # a user

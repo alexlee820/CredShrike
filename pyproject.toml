@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "smbenum"
+name = "credshrike"
 version = "0.3.0"
 description = "Multi-auth SMB enumeration toolkit with LDAP/ADWS domain queries and a capability-limited LLM agent"
 requires-python = ">=3.10"
@@ -20,10 +20,10 @@ dependencies = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-smbenum = "smbenum.cli:main"
+credshrike = "credshrike.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["smbenum*"]
+include = ["credshrike*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

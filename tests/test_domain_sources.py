@@ -6,10 +6,10 @@ import struct
 
 import pytest
 
-from smbenum.credentials import Credential
+from credshrike.credentials import Credential
 
-from smbenum.domain.base import computer_record_from_attributes
-from smbenum.domain.ldap_source import LdapSource, decode_sid
+from credshrike.domain.base import computer_record_from_attributes
+from credshrike.domain.ldap_source import LdapSource, decode_sid
 
 
 # --------------------------------------------------------------------------- #
@@ -140,7 +140,7 @@ def ldap_source(monkeypatch):
     def factory(credential, dc, port=389, use_ssl=False, page_size=1000):
         return LdapSource(credential, dc, port=port, use_ssl=use_ssl, page_size=page_size)
 
-    import smbenum.domain.ldap_source as mod
+    import credshrike.domain.ldap_source as mod
     orig_init = mod.LdapSource.connect
 
     def patched_connect(self):

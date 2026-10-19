@@ -3,9 +3,9 @@
 import json
 from types import SimpleNamespace
 
-from smbenum.agent.findings import extract_findings, _parse_findings_json
-from smbenum.config import Policy
-from smbenum.report import build_report_html, write_report
+from credshrike.agent.findings import extract_findings, _parse_findings_json
+from credshrike.config import Policy
+from credshrike.report import build_report_html, write_report
 
 
 def _client(script: list[str]):
@@ -101,7 +101,7 @@ def test_report_html_contains_all_sections(tmp_path):
     path = write_report(str(tmp_path / "out.html"), context={"principal": "x"},
                         findings=[], scan_results=[], flagged=[], report_md="",
                         audit_path=audit_path)
-    assert "smbenum" in open(path, encoding="utf-8").read()[:2000]
+    assert "CredShrike" in open(path, encoding="utf-8").read()[:2000]
 
 
 def test_report_transcript_tab():
@@ -157,7 +157,7 @@ def test_extraction_completeness_crosscheck():
     names -> union is still short -> ONE corrective round fires and names
     the miss."""
     import json as _json
-    from smbenum.agent.findings import extract_findings
+    from credshrike.agent.findings import extract_findings
     calls = []
     bs = chr(92)
 
@@ -182,7 +182,7 @@ def test_extraction_completeness_crosscheck():
             text = incomplete if len(calls) <= 2 else complete
             return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
 
-    from smbenum.config import Policy
+    from credshrike.config import Policy
     messages = [
         {"role": "user", "content": "goal"},
         {"role": "assistant", "content": [
@@ -198,7 +198,7 @@ def test_extraction_completeness_crosscheck():
 
 
 def test_placeholder_usernames_sanitized():
-    from smbenum.agent.findings import _sanitize
+    from credshrike.agent.findings import _sanitize
     out = _sanitize({"findings": [
         {"severity": "low", "category": "credential", "username": "—",
          "secret": "x", "host": "", "share": "", "path": "", "evidence": "", "note": ""},
@@ -211,7 +211,7 @@ def test_double_extraction_union_catches_omissions():
     """Two passes each miss a different credential — the union keeps both,
     no corrective round needed (both are in the report text)."""
     import json as _json
-    from smbenum.agent.findings import extract_findings
+    from credshrike.agent.findings import extract_findings
     calls = []
 
     a_only = _json.dumps({"findings": [
@@ -229,7 +229,7 @@ def test_double_extraction_union_catches_omissions():
             text = a_only if len(calls) == 1 else b_only
             return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
 
-    from smbenum.config import Policy
+    from credshrike.config import Policy
     messages = [
         {"role": "user", "content": "goal"},
         {"role": "assistant", "content": [
@@ -245,7 +245,7 @@ def test_double_extraction_union_catches_omissions():
 
 
 def test_union_dedupes_same_credential():
-    from smbenum.agent.findings import _merge_passes
+    from credshrike.agent.findings import _merge_passes
     entry = {"severity": "low", "category": "credential", "host": "h", "share": "s",
              "path": "a", "username": "HACKADAY" + chr(92) + "x", "secret": "P",
              "evidence": "e1", "note": ""}

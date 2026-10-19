@@ -1,6 +1,6 @@
 import pytest
 
-from smbenum.credentials import AuthType, Credential
+from credshrike.credentials import AuthType, Credential
 
 
 def test_from_args_password():

@@ -2,8 +2,8 @@
 
 import base64
 
-from smbenum.patterns import classify_file, compile_patterns
-from smbenum.scanner import scan_share, mask_line
+from credshrike.patterns import classify_file, compile_patterns
+from credshrike.scanner import scan_share, mask_line
 
 
 class FakeScanSMB:
@@ -178,7 +178,7 @@ def test_data_files_surfaced_even_without_regex_hits():
 # --------------------------------------------------------------------------- #
 # full-content dump (custom-goal mode: EVERY file, no tier filtering)
 # --------------------------------------------------------------------------- #
-from smbenum.scanner import dump_share
+from credshrike.scanner import dump_share
 
 
 def test_dump_includes_all_formats():

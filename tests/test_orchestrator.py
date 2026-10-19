@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from smbenum.agent.orchestrator import merge_findings, run_domain_sweep
-from smbenum.config import Policy
-from smbenum.credentials import Credential
-from smbenum.domain.base import ComputerRecord
+from credshrike.agent.orchestrator import merge_findings, run_domain_sweep
+from credshrike.config import Policy
+from credshrike.credentials import Credential
+from credshrike.domain.base import ComputerRecord
 
 
 def _client_factory_for_hosts(hosts_findings: dict):
@@ -50,7 +50,7 @@ def _client_factory_for_hosts(hosts_findings: dict):
 def fake_smb(monkeypatch):
     from test_agent import FakeSMB
     fake = FakeSMB()
-    import smbenum.agent.session as session_mod
+    import credshrike.agent.session as session_mod
     monkeypatch.setattr(session_mod.AgentSession, "smb",
                         lambda self, host: fake)
     return fake
@@ -151,7 +151,7 @@ def test_merge_findings_unit():
 
 
 def test_resolve_preset_default_is_full_domain():
-    from smbenum.agent.cli_agent import _resolve_preset
+    from credshrike.agent.cli_agent import _resolve_preset
     from types import SimpleNamespace as NS
     # bare invocation -> full-domain default
     assert _resolve_preset(NS(preset=None, goal=None, repl=False)) == "full-domain"

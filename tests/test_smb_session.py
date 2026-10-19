@@ -4,9 +4,9 @@ import base64
 
 import pytest
 
-import smbenum.smb_session as mod
-from smbenum.credentials import AuthType, Credential
-from smbenum.smb_session import login_smb
+import credshrike.smb_session as mod
+from credshrike.credentials import AuthType, Credential
+from credshrike.smb_session import login_smb
 
 from test_sd_parser import build_sd, _ace, OWNER, ADMINS
 

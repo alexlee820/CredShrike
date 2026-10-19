@@ -14,7 +14,7 @@ from impacket.krb5.asn1 import (EncKrbCredPart, EncryptedData, KRB_CRED,
                                 KrbCredInfo, Ticket)
 from impacket.krb5.ccache import CCache
 
-from smbenum.krbutil import kirbi_to_ccache, load_ticket
+from credshrike.krbutil import kirbi_to_ccache, load_ticket
 
 
 def _set(parent, name, value=None):
@@ -107,7 +107,7 @@ def test_getcredential_finds_tgt_after_conversion():
     found = ccache.getCredential("krbtgt/CORP.LOCAL@CORP.LOCAL")
     assert found is not None
     # extract_for_spn should hand back domain/user + a TGT usable by kerberosLogin
-    from smbenum.krbutil import extract_for_spn
+    from credshrike.krbutil import extract_for_spn
     domain, user, tgt, tgs = extract_for_spn(ccache, spn="cifs/filesrv01.corp.local")
     assert domain == "CORP.LOCAL" and user == "jdoe"
     assert tgt is not None and tgs is None
@@ -123,7 +123,7 @@ def test_load_ticket_dispatches_by_magic(tmp_path):
     assert len(ccache.credentials) == 1
 
     # a real ccache file: serialize the converted cache back out
-    from smbenum.krbutil import ccache_to_bytes
+    from credshrike.krbutil import ccache_to_bytes
     ccache2_path = tmp_path / "tkt.ccache"
     ccache2_path.write_bytes(ccache_to_bytes(ccache))
     loaded = load_ticket(str(ccache2_path))

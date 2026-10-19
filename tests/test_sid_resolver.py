@@ -1,5 +1,5 @@
-from smbenum.acl import SidResolver
-from smbenum.acl.sd_parser import parse_security_descriptor
+from credshrike.acl import SidResolver
+from credshrike.acl.sd_parser import parse_security_descriptor
 from test_sd_parser import build_sd, _ace, OWNER, EVERYONE
 
 
