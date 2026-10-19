@@ -37,6 +37,10 @@ def _build_session(args):
     elif getattr(args, "api_base_url", None):
         # custom endpoint: adaptive thinking is Anthropic-specific — default off
         policy.thinking_mode = "off"
+    if getattr(args, "debug", False):
+        policy.debug = True
+        import logging
+        logging.getLogger("smbenum").setLevel(logging.DEBUG)
     from .audit import AuditLog
     from .session import AgentSession
     audit = AuditLog.new_run(args.audit_dir)
@@ -97,7 +101,8 @@ def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> s
                  extraction_error=extraction_error,
                  domain_computers=session.domain_computers,
                  share_inventories=session.share_inventories,
-                 transcript=loop.transcript)
+                 transcript=loop.transcript,
+                 debug_results=session.debug_results if policy.debug else [])
     print(f"[agent] HTML report: {path}")
     return path
 
@@ -215,4 +220,9 @@ def register(subparsers) -> None:
                         "API and OFF when --api-base-url is set (3rd-party endpoints may "
                         "reject the thinking parameter)")
     p.add_argument("--goal", default=None, help="run one goal non-interactively and exit")
+    p.add_argument("--debug", action="store_true",
+                   help="debug mode: echo the FULL tool results (exactly what the "
+                        "model received — verify transports like adws via the "
+                        "'source' field, inspect dump/scan pages); also recorded "
+                        "in the report's Debug tab")
     p.set_defaults(func=cmd_agent)

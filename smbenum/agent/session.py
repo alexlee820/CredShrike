@@ -87,6 +87,9 @@ class AgentSession:
         self.domain_computers: list[dict] = []
         # per-host share inventory: host -> [share dicts] (smb_list_shares)
         self.share_inventories: dict[str, list] = {}
+        # debug mode: full rendered tool results exactly as the model saw them
+        # ({tool, args, chars, content}), capped to keep memory sane
+        self.debug_results: list[dict] = []
         # optional progress hook for UIs/echo: emit(kind, data) — set by the
         # web app so mid-sweep progress reaches the browser
         self.event_hook = None

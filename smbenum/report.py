@@ -92,7 +92,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                       redactions: int = 0, extraction_error: str = "",
                       domain_computers: Optional[list] = None,
                       share_inventories: Optional[dict] = None,
-                      transcript: Optional[list] = None) -> str:
+                      transcript: Optional[list] = None,
+                      debug_results: Optional[list] = None) -> str:
     audit = _read_audit(audit_path)
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
@@ -109,7 +110,16 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
             stats[key] = stats.get(key, 0) + value
 
     transcript = transcript or []
+    debug_results = debug_results or []
     ai_turns = sum(1 for e in transcript if e.get("kind") == "assistant")
+
+    debug_entries = "".join(
+        f"<div class='turn'><div class='who'>{_esc(i + 1)}. {_esc(d['tool'])} "
+        f"<span class='dim'>({d['chars']} chars)</span></div>"
+        f"<div class='mono dim'>{_esc(json.dumps(d['args'], ensure_ascii=False)[:200])}</div>"
+        f"<pre class='report'>{_esc(d['content'])}</pre></div>"
+        for i, d in enumerate(debug_results)) or \
+        "<p class='dim'>debug mode was off for this run</p>"
 
     computers_rows = "".join(
         f"<tr><td>{_esc(c.get('cn'))}</td>"
@@ -273,6 +283,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <button class="tab" data-tab="smb">SMB activity<span class="badge">{len(reads) + len(flagged)}</span></button>
   <button class="tab" data-tab="aireport">AI report</button>
   <button class="tab" data-tab="transcript">Transcript<span class="badge">{ai_turns}</span></button>
+  {"<button class='tab' data-tab='debug'>Debug<span class='badge'>" + str(len(debug_results)) + "</span></button>" if debug_results else ""}
   <button class="tab" data-tab="audit">Audit<span class="badge">{len(audit)}</span></button>
 </nav>
 
@@ -339,6 +350,9 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <h2>AI transcript — every response, in order</h2>
   {_render_transcript(transcript)}
 </div>
+
+{("<div class='tab-panel' id='debug'><h2>Debug — full tool results exactly as "
+  "the model received them</h2>" + debug_entries + "</div>") if debug_results else ""}
 
 <div class="tab-panel" id="audit">
   <h2>Audit trail ({len(audit)} calls)</h2>

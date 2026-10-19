@@ -114,6 +114,9 @@ class AgentLoop:
             outcome = self.executor.execute(block.name, dict(block.input or {}))
             self.echo(f"  ← {block.name}: "
                       f"{'error' if outcome['is_error'] else 'ok'} ({len(outcome['content'])} chars)")
+            if self.session.policy.debug:
+                # debug mode: show the FULL result exactly as the model sees it
+                self.echo(f"  ▼ {block.name} result:\n{outcome['content']}")
             transcript_items.append({"name": block.name,
                                      "ok": not outcome["is_error"],
                                      "chars": len(outcome["content"])})

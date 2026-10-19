@@ -89,7 +89,8 @@ class RunState:
                          "dc": session.dc,
                          "model": session.policy.model,
                          "endpoint": session.policy.api_base_url or "api.anthropic.com",
-                         "thinking": session.policy.thinking_mode} if session else None),
+                         "thinking": session.policy.thinking_mode,
+                         "debug": session.policy.debug} if session else None),
         }
 
 
@@ -176,7 +177,8 @@ def _emit_report(loop, session, policy, audit, client, report_md: str) -> str:
                  extraction_error=extraction_error,
                  domain_computers=session.domain_computers,
                  share_inventories=session.share_inventories,
-                 transcript=loop.transcript)
+                 transcript=loop.transcript,
+                 debug_results=session.debug_results if session.policy.debug else [])
     return path
 
 
@@ -232,6 +234,8 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
     elif params.get("api_base_url"):
         # adaptive thinking is Anthropic-specific; default off off-API
         policy.thinking_mode = "off"
+    if params.get("debug"):
+        policy.debug = True
 
 
 # --------------------------------------------------------------------------- #

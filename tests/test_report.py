@@ -120,3 +120,14 @@ def test_report_transcript_tab():
     assert "find passwords" in html and "AI · turn 1" in html
     assert "smb_scan_share" in html and "(4321c)" in html
     assert "AI · turn 2" in html
+
+
+def test_report_debug_tab_only_when_debug_results():
+    base = dict(context={"principal": "x"}, findings=[], scan_results=[],
+                flagged=[], report_md="", audit_path="")
+    plain = build_report_html(**base)
+    assert "data-tab=\"debug\"" not in plain                     # no tab when off
+    dbg = build_report_html(**base, debug_results=[
+        {"tool": "domain_list_computers", "args": {"source": "adws"},
+         "chars": 42, "content": '{"source": "adws", "computers": []}'}])
+    assert "data-tab=\"debug\"" in dbg and "adws" in dbg and "domain_list_computers" in dbg

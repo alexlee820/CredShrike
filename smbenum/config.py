@@ -51,6 +51,8 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "dump_per_file_bytes": 16384,       # head sent per file
     "dump_page_chars": 24000,           # page target (tool char_cap is 40000)
     "dump_max_files": 500,
+    # --- debug mode: echo + record FULL tool results (what the model saw) --
+    "debug": False,
     # --- LLM endpoint (Anthropic-compatible providers: GLM, DeepSeek, ...) ---
     "api_base_url": "",                 # empty = official Anthropic API
     "api_key": "",                      # empty = ANTHROPIC_API_KEY env / auth profile
@@ -87,6 +89,7 @@ class Policy:
     dump_per_file_bytes: int = DEFAULT_POLICY_DICT["dump_per_file_bytes"]
     dump_page_chars: int = DEFAULT_POLICY_DICT["dump_page_chars"]
     dump_max_files: int = DEFAULT_POLICY_DICT["dump_max_files"]
+    debug: bool = DEFAULT_POLICY_DICT["debug"]
     api_base_url: str = DEFAULT_POLICY_DICT["api_base_url"]
     api_key: str = DEFAULT_POLICY_DICT["api_key"]
     thinking_mode: str = DEFAULT_POLICY_DICT["thinking_mode"]

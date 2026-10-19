@@ -125,6 +125,11 @@
         <input id="apiBaseUrl" placeholder="https://api.deepseek.com/anthropic"/></div>
       <div class="field"><label>API key (optional — else ANTHROPIC_API_KEY)</label>
         <input id="apiKey" type="password" placeholder="sk-..."/></div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="debugMode" style="width:auto"/>
+        <label style="margin:0" for="debugMode">Debug — show FULL tool results
+          (verify adws/ldap via "source", inspect dump pages)</label>
+      </div>
     </div>
 
     <div id="authFields">
@@ -216,6 +221,7 @@ $('startBtn').onclick = async () => {
     model: $('model').value.trim(),
     api_base_url: $('apiBaseUrl').value.trim(),
     api_key: $('apiKey').value.trim(),
+    debug: $('debugMode').checked,
   };
   const r = await fetch('/api/runs', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify(params)});

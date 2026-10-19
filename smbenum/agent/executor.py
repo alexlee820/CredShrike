@@ -79,6 +79,12 @@ class ToolExecutor:
         if redactions:
             # appended AFTER truncation so the note always survives
             content += f"\n[+{redactions} redaction(s) applied per session policy]"
+        if self.policy.debug:
+            # keep the exact rendered result the model received
+            if len(self.session.debug_results) < 300:
+                self.session.debug_results.append(
+                    {"tool": tool_name, "args": raw_args, "chars": len(content),
+                     "content": content})
         self.audit.record(tool_name, raw_args, verdict if not capped else "capped",
                           result_chars=len(content), duration_ms=timer.ms,
                           redactions=redactions or None)

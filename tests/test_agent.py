@@ -457,3 +457,32 @@ def test_dump_tool_char_cap_overrides_policy(session):
     out2 = _executor(session).execute("smb_dump_share", {
         "host": "filesrv01.corp.local", "share": "IT"})
     assert "[TRUNCATED" not in out2["content"]     # dump tool: 40K cap applies
+
+
+def test_debug_mode_captures_and_echoes_full_results(session):
+    session.policy.debug = True
+    echo_lines = []
+    client = SimpleNamespace(messages=FakeMessages([
+        SimpleNamespace(stop_reason="tool_use",
+                        content=[_tool_use("t1", "smb_list_shares",
+                                           {"host": "filesrv01.corp.local"})]),
+        SimpleNamespace(stop_reason="end_turn", content=[_text("done")]),
+    ]))
+    from smbenum.agent.loop import AgentLoop
+    loop = AgentLoop(client, session, session.policy, session.audit,
+                     echo=echo_lines.append)
+    loop.run("check")
+
+    # full result stashed harness-side
+    assert len(session.debug_results) == 1
+    d = session.debug_results[0]
+    assert d["tool"] == "smb_list_shares" and "IT" in d["content"] and d["chars"] > 0
+    # echo included the full result block
+    assert any(l.startswith("  ▼ smb_list_shares result:") and '"name": "IT"' in l
+               for l in echo_lines)
+
+
+def test_debug_off_captures_nothing(session):
+    assert not session.policy.debug
+    _executor(session).execute("smb_list_shares", {"host": "filesrv01.corp.local"})
+    assert session.debug_results == []
