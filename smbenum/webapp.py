@@ -120,6 +120,27 @@ def _execute_run(state: RunState) -> None:
         policy = Policy.load(params.get("policy_path") or None)
         _apply_policy_overrides(policy, params)
 
+        if params.get("preset") == "full-domain":
+            from .orchestrator import run_domain_sweep
+            summary = run_domain_sweep(
+                credential=credential, policy=policy,
+                audit_dir=params.get("audit_dir") or "runs",
+                dc=params.get("dc") or "",
+                domain_source=params.get("domain_source") or "auto",
+                computers_filter=params.get("computers_filter") or "",
+                max_hosts=int(params["max_hosts"]) if params.get("max_hosts") else None,
+                client_factory=lambda: (_client_factory() if _client_factory
+                                        else _build_client(params)),
+                echo=state.push)
+            done = sum(1 for h in summary["hosts"] if h["status"] == "done")
+            state.report = (f"Domain sweep: {done}/{len(summary['hosts'])} hosts swept, "
+                            f"{len(summary['merged']['credentials'])} unique credential(s). "
+                            f"Index report: {summary['index_html']}")
+            state.report_html_path = summary["index_html"]
+            state.audit_path = summary["run_dir"]
+            state.status = "done"
+            return
+
         audit = AuditLog.new_run(params.get("audit_dir") or "runs")
         state.audit_path = audit.path
         hosts = [h.strip() for h in (params.get("host") or "").split(",") if h.strip()]

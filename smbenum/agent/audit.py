@@ -35,9 +35,11 @@ class AuditLog:
         self._fh = open(path, "a", encoding="utf-8")
 
     @classmethod
-    def new_run(cls, directory: str = "runs") -> "AuditLog":
+    def new_run(cls, directory: str = "runs", suffix: str = "") -> "AuditLog":
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        return cls(os.path.join(directory, f"{stamp}.jsonl"))
+        safe = "".join(c if c.isalnum() or c in "-." else "_" for c in suffix)[:48]
+        name = f"{stamp}_{safe}.jsonl" if safe else f"{stamp}.jsonl"
+        return cls(os.path.join(directory, name))
 
     def record(self, tool: str, args: dict, verdict: str, *, result_chars: int = 0,
                duration_ms: int = 0, error: Optional[str] = None,

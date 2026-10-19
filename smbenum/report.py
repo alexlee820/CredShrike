@@ -389,3 +389,152 @@ def write_report(path: str, **kwargs) -> str:
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(html_text)
     return path
+
+
+# --------------------------------------------------------------------------- #
+# domain-sweep index (full-domain preset)
+# --------------------------------------------------------------------------- #
+def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
+                            computers: list) -> str:
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    status_colors = {"done": "#43d17c", "unreachable": "#7d8a99",
+                     "error": "#ff6b6b", "skipped-budget": "#ffb84d"}
+
+    host_options = "".join(f'<option value="{_esc(h["host"])}">{_esc(h["host"])}</option>'
+                           for h in hosts)
+
+    def _link_cell(h: dict) -> str:
+        if not h.get("html"):
+            return "<td class='dim'>—</td>"
+        return (f"<td><a href='{_esc(h['html'])}'>"
+                f"{_esc(h['html'])}</a></td>")
+
+    matrix_rows = "".join(
+        f"<tr><td class='path'>{_esc(h['host'])}</td>"
+        f"<td><b style='color:{status_colors.get(h['status'], '#7d8a99')}'>{_esc(h['status'])}</b></td>"
+        f"<td>{len(h.get('shares', []))}</td><td>{h.get('tool_calls', 0)}</td>"
+        f"<td>{(h.get('bytes_read', 0) / 1024):.0f}K</td>"
+        f"<td>{len(h.get('findings', []))}</td>"
+        f"{_link_cell(h)}"
+        f"<td class='dim'>{_esc(h.get('error', '') or '')}</td></tr>"
+        for h in hosts)
+
+    cred_rows = ""
+    for f in merged.get("credentials", []):
+        locations = "; ".join(f"{_esc(l['host'])}/{_esc(l['share'])}/{_esc(l['path'])}"
+                              for l in f.get("locations", []))
+        hosts_attr = " ".join(sorted({l["host"] for l in f.get("locations", [])}))
+        cred_rows += (f"<tr data-host=\"{_esc(hosts_attr)}\">"
+                      f"<td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
+                      f"<td>{_esc(f.get('username') or '—')}</td>{_secret_cell(f.get('secret'))}"
+                      f"<td class='path'>{locations}</td>"
+                      f"<td class='dim ev'>{_esc(f.get('evidence', ''))}</td></tr>")
+    cred_rows = cred_rows or "<tr><td colspan='5' class='dim'>none</td></tr>"
+
+    other_rows = "".join(
+        f"<tr data-host=\"{_esc(f['locations'][0]['host'])}\">"
+        f"<td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
+        f"<td>{_esc(f['category'])}</td>"
+        f"<td class='path'>{_esc(f['locations'][0]['host'])}/{_esc(f['locations'][0]['share'])}"
+        f"/{_esc(f['locations'][0]['path'])}</td>"
+        f"<td>{_esc(f.get('note', ''))}</td></tr>"
+        for f in merged.get("other", [])) or \
+        "<tr><td colspan='4' class='dim'>none</td></tr>"
+
+    def _summary_line(h: dict) -> str:
+        link = (f" · <a href='{_esc(h['html'])}'>full report</a>"
+                if h.get("html") else "")
+        return f"{_esc(h['host'])} — {_esc(h['status'])}{link}"
+
+    per_host_reports = "".join(
+        f"<details data-host=\"{_esc(h['host'])}\"><summary>{_summary_line(h)}</summary>"
+        f"<pre class='report'>{_esc(h.get('report_md', '') or h.get('error', '') or '—')}</pre></details>"
+        for h in hosts)
+
+    done = sum(1 for h in hosts if h["status"] == "done")
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>smbenum domain sweep — {_esc(context.get('principal'))} ({done}/{len(hosts)} hosts)</title>
+<style>
+  :root {{ --bg:#101418; --panel:#171d24; --line:#26303a; --fg:#cdd6e0; --dim:#7d8a99; --acc:#4da3ff; }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; font:14px/1.5 "Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--fg); }}
+  .wrap {{ max-width:1300px; margin:0 auto; padding:24px 20px; }}
+  h1 {{ font-size:20px; margin:0; }} h2 {{ font-size:14px; color:var(--acc);
+       text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid var(--line);
+       padding-bottom:6px; margin:28px 0 10px; }}
+  .meta {{ display:flex; flex-wrap:wrap; gap:6px 22px; color:var(--dim); font-size:12px; margin-top:8px; }}
+  .meta b {{ color:var(--fg); }}
+  select {{ background:#0d1117; color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:6px 10px; font:inherit; margin:10px 0; }}
+  table {{ width:100%; border-collapse:collapse; background:var(--panel);
+          border:1px solid var(--line); border-radius:8px; overflow:hidden; }}
+  th, td {{ padding:7px 10px; text-align:left; border-bottom:1px solid var(--line); font-size:13px; }}
+  th {{ color:var(--dim); font-size:11px; text-transform:uppercase; background:#12171d; }}
+  tr:last-child td {{ border-bottom:0; }}
+  .dim {{ color:var(--dim); }} .path {{ font-family:Consolas,monospace; font-size:12px; color:#b9d4f0; }}
+  .ev {{ font-size:11px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+  .sev {{ padding:1px 8px; border-radius:9px; font-size:11px; font-weight:600; color:#101418; }}
+  .sev.high {{ background:#ff6b6b; }} .sev.medium {{ background:#ffb84d; }} .sev.low {{ background:#4da3ff; }}
+  .secret {{ font-family:Consolas,monospace; }}
+  .reveal {{ background:#22303d; color:var(--fg); border:0; border-radius:4px;
+            font-size:10px; padding:1px 6px; cursor:pointer; }}
+  pre.report {{ background:#0b0f13; border:1px solid var(--line); border-radius:8px;
+               padding:14px; white-space:pre-wrap; font:13px/1.6 Consolas,monospace; }}
+  details {{ margin:10px 0; }} summary {{ cursor:pointer; color:var(--acc); }}
+  footer {{ color:var(--dim); font-size:11px; margin-top:30px; border-top:1px solid var(--line); padding-top:10px; }}
+</style></head><body><div class="wrap">
+<h1>smbenum — domain sweep report</h1>
+<div class="meta">
+  <span>credential <b>{_esc(context.get('principal'))}</b> ({_esc(context.get('auth_type'))})</span>
+  <span>model <b>{_esc(context.get('model'))}</b></span>
+  <span>endpoint <b>{_esc(context.get('endpoint'))}</b></span>
+  <span>generated <b>{ts}</b></span>
+  <span>computers in domain <b>{len(computers)}</b></span>
+  <span>hosts swept <b>{done}/{len(hosts)}</b></span>
+</div>
+
+<h2>Coverage matrix</h2>
+<table><tr><th>host</th><th>status</th><th>shares</th><th>tool calls</th><th>read</th>
+<th>findings</th><th>full report</th><th>error</th></tr>
+{matrix_rows}</table>
+
+<h2>Credentials — merged across hosts (identical user/secret collapsed)</h2>
+<label style="font-size:12px;color:var(--dim)">filter by host:</label>
+<select id="hostFilter" onchange="filterHost(this.value)">
+  <option value="">all hosts</option>{host_options}
+</select>
+<table id="credTable"><tr><th>severity</th><th>username</th><th>secret</th>
+<th>locations</th><th>evidence</th></tr>{cred_rows}</table>
+
+<h2>Other findings</h2>
+<table><tr><th>severity</th><th>category</th><th>location</th><th>note</th></tr>{other_rows}</table>
+
+<h2>Per-host AI reports</h2>
+{per_host_reports}
+
+<footer>Generated by smbenum full-domain sweep. Per-host details in the linked
+reports; this artifact contains credentials by design.</footer>
+<script>
+function reveal(btn) {{
+  const s = btn.previousElementSibling; const real = s.getAttribute('data-real');
+  if (btn.textContent === 'show') {{ s.textContent = real; btn.textContent = 'hide'; }}
+  else {{ btn.textContent = 'show'; s.textContent = real[0] + '•'.repeat(Math.max(real.length - 1, 3)); }}
+}}
+function filterHost(host) {{
+  document.querySelectorAll('[data-host]').forEach(row => {{
+    if (!host || (row.getAttribute('data-host') || '').split(' ').includes(host))
+      row.style.display = '';
+    else row.style.display = 'none';
+  }});
+}}
+</script>
+</div></body></html>"""
+
+
+def write_domain_index(path: str, **kwargs) -> str:
+    html_text = build_domain_index_html(**kwargs)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html_text)
+    return path

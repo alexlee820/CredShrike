@@ -9,8 +9,7 @@ from ..cli import add_auth_args, build_credential
 from ..config import Policy
 
 
-def _build_session(args):
-    credential = build_credential(args)
+def _load_policy(args) -> Policy:
     policy = Policy.load(args.policy)
     if args.model:
         policy.model = args.model
@@ -43,6 +42,12 @@ def _build_session(args):
         logging.getLogger("smbenum").setLevel(logging.DEBUG)
     if getattr(args, "context_limit", None):
         policy.context_token_limit = int(args.context_limit)
+    return policy
+
+
+def _build_session(args):
+    credential = build_credential(args)
+    policy = _load_policy(args)
     from .audit import AuditLog
     from .session import AgentSession
     audit = AuditLog.new_run(args.audit_dir)
@@ -124,6 +129,21 @@ def _make_client(policy=None):
 
 
 def cmd_agent(args) -> None:
+    # full-domain: per-computer fan-out (each host gets its own context window)
+    if args.preset == "full-domain":
+        from .orchestrator import run_domain_sweep
+        credential = build_credential(args)
+        policy = _load_policy(args)
+        print(f"[domain] credential {credential.redacted()['principal']} "
+              f"({credential.redacted()['auth_type']}) | model {policy.model} | "
+              f"dc {args.dc or '-'} | source {args.source}")
+        run_domain_sweep(credential=credential, policy=policy,
+                         audit_dir=args.audit_dir, dc=args.dc or "",
+                         domain_source=args.source,
+                         computers_filter=args.computers_filter or "",
+                         max_hosts=args.max_hosts or None)
+        return
+
     session, policy, audit = _build_session(args)
     red = session.credential.redacted()
     print(f"[agent] credential {red['principal']} ({red['auth_type']}) | "
@@ -209,10 +229,17 @@ def register(subparsers) -> None:
     p.add_argument("--scan-patterns", default=None,
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")
-    p.add_argument("--preset", choices=["snaffler", "full"], default=None,
+    p.add_argument("--preset", choices=["snaffler", "full", "full-domain"], default=None,
                    help="canned goal: 'snaffler' = tier/regex sweep then judgment; "
                         "'full' = smb_dump_share EVERY file (any format) then "
-                        "extraction — full-content review")
+                        "extraction — full-content review; 'full-domain' = "
+                        "per-computer fan-out (own context window per host, "
+                        "merged cross-host credentials + index report)")
+    p.add_argument("--computers-filter", default="",
+                   help="full-domain: extra LDAP filter for host selection, e.g. "
+                        "'(operatingSystem=*Server*)'")
+    p.add_argument("--max-hosts", type=int, default=None,
+                   help="full-domain: cap the number of computers swept")
     p.add_argument("--api-base-url", default=None,
                    help="Anthropic-compatible endpoint override, e.g. "
                         "https://api.deepseek.com/anthropic or the GLM /api/anthropic URL "
