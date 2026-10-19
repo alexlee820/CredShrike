@@ -150,3 +150,54 @@ def test_long_values_do_not_break_layout():
     assert html_out.count("overflow-wrap:anywhere") >= 1     # wrap-safe CSS present
     # debug content capped, not fully rendered
     assert "z" * 60000 not in html_out
+
+
+def test_extraction_completeness_crosscheck():
+    """Real-world failure: the model's final report names HACKADAY\jchen but
+    the extraction JSON omits it -> ONE corrective round must fire."""
+    import json as _json
+    from smbenum.agent.findings import extract_findings
+    calls = []
+
+    incomplete = _json.dumps({"findings": [{
+        "severity": "high", "category": "credential", "host": "FILE01",
+        "share": "CTF$", "path": "vault.txt", "username": "HACKADAY\mwong",
+        "secret": "Pass1", "evidence": "read vault", "note": ""}]})
+    complete = _json.dumps({"findings": [
+        {"severity": "high", "category": "credential", "host": "FILE01",
+         "share": "CTF$", "path": "vault.txt", "username": "HACKADAY\mwong",
+         "secret": "Pass1", "evidence": "read vault", "note": ""},
+        {"severity": "high", "category": "credential", "host": "FILE01",
+         "share": "CTF$", "path": "IT/backup_old.bat",
+         "username": "HACKADAY\jchen", "secret": "Welcome1",
+         "evidence": "net use /user:HACKADAY\jchen Welcome1", "note": ""}]})
+
+    class Msgs:
+        def create(self, **kw):
+            calls.append(kw)
+            return SimpleNamespace(content=[SimpleNamespace(
+                type="text", text=incomplete if len(calls) == 1 else complete)])
+
+    from smbenum.config import Policy
+    messages = [
+        {"role": "user", "content": "goal"},
+        {"role": "assistant", "content": [
+            SimpleNamespace(type="text",
+                            text="| 6 | backup_old.bat | HACKADAY\jchen | Welcome1 | net use |")],
+        },
+    ]
+    out = extract_findings(SimpleNamespace(messages=Msgs()), Policy(), messages)
+    users = {f["username"] for f in out}
+    assert "HACKADAY\jchen" in users and "HACKADAY\mwong" in users
+    assert len(calls) == 2                       # corrective round fired
+    assert "jchen" in str(calls[1]["messages"][-1])   # corrective prompt named the miss
+
+
+def test_placeholder_usernames_sanitized():
+    from smbenum.agent.findings import _sanitize
+    out = _sanitize({"findings": [
+        {"severity": "low", "category": "credential", "username": "—",
+         "secret": "x", "host": "", "share": "", "path": "", "evidence": "", "note": ""},
+        {"severity": "low", "category": "credential", "username": "�",
+         "secret": "y", "host": "", "share": "", "path": "", "evidence": "", "note": ""}]})
+    assert all(f["username"] is None for f in out)

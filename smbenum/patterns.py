@@ -29,6 +29,9 @@ DEFAULT_PATTERNS: list[dict] = [
     {"name": "github_token", "pattern": r"\bghp_[A-Za-z0-9]{36}\b"},
     {"name": "slack_token", "pattern": r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"},
     {"name": "azure_storage_key", "pattern": r"\bAccountKey=[A-Za-z0-9+/=]{60,}"},
+    # command-line credential: net use \\srv\share /user:DOMAIN\user password
+    # (group = the SECRET so masking hides the password, username stays visible)
+    {"name": "net_use_credential", "pattern": r"(?i)/user:[A-Za-z0-9_.\\$-]+\s+([^\s\"\x27]{4,})"},
 ]
 
 # --- file triage tiers ------------------------------------------------------ #

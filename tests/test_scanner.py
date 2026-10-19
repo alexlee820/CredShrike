@@ -209,3 +209,12 @@ def test_dump_paging_and_per_file_head():
     assert page2["files_skip"] == 2 and page2["next_skip"] == 4
     last = dump_share(fake2, "IT", page_chars=2000, skip_files=4)
     assert len(last["files"]) == 2 and last["next_skip"] is None
+
+
+def test_net_use_credential_pattern():
+    result = scan_share(FakeScanSMB(
+        tree={"": ["b.bat"]},
+        contents={"b.bat": b"net use \\FILE01\CTF$ /user:HACKADAY\jchen Welcome1\r\n"}),
+        "IT")
+    hit = next(m for m in result["matches"] if m["pattern"] == "net_use_credential")
+    assert "Welcome1" not in hit["snippet"] and "***" in hit["snippet"]
