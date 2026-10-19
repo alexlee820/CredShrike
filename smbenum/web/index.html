@@ -207,9 +207,9 @@
 <script>
 let runId = null, timer = null, allLines = [], visibleCount = 100;
 
-$('showMoreBtn').onclick = () => { visibleCount += 500; renderLive(); };
+const $ = id => document.getElementById(id);   // MUST precede all $() uses (TDZ)
 
-const $ = id => document.getElementById(id);
+$('showMoreBtn').onclick = () => { visibleCount += 500; renderLive(); };
 
 $('authType').onchange = () => {
   const t = $('authType').value;
