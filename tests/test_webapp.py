@@ -250,3 +250,45 @@ def test_full_domain_webapp_path(client, monkeypatch):
     assert s["report_html"] and "index.html" in s["report_html"]
     page = client.get(f"/api/runs/{run_id}/report_html")
     assert page.status_code == 200 and "Coverage matrix" in page.get_data(as_text=True)
+
+
+def test_long_debug_lines_are_capped(client, fake_client):
+    """Debug-mode tool results can be 40K+ chars per line — the API must cap
+    them or the polling payload kills the browser."""
+    import smbenum.webapp as w
+    state = w.RunState("x", {})
+    state.push("x" * 40000)
+    got = state.public()["lines"][0]
+    assert len(got) <= 4100 and "line truncated" in got
+
+
+def test_full_domain_per_host_links_served(client, monkeypatch):
+    """Regression: the index's relative per-host hrefs resolve under the web
+    route to /api/runs/<id>/<file> — that route must serve them."""
+    import smbenum.agent.orchestrator as orch
+    from test_agent import FakeSMB
+    from smbenum.domain.base import ComputerRecord
+    import smbenum.agent.session as session_mod
+    monkeypatch.setattr(session_mod.AgentSession, "smb", lambda self, host: FakeSMB())
+    monkeypatch.setattr(orch, "_resolve_computers",
+                        lambda *a, **k: [ComputerRecord(cn="WS01", dns_name="ws01.corp.local")])
+    monkeypatch.setattr(orch, "_port_open", lambda host, port=445, timeout=3: True)
+
+    class Ok:
+        def create(self, **kw):
+            return SimpleNamespace(stop_reason="end_turn",
+                                   content=[SimpleNamespace(type="text", text="ok")])
+    monkeypatch.setattr(webapp, "_client_factory", lambda: SimpleNamespace(messages=Ok()))
+
+    run_id = client.post("/api/runs", json=_params(preset="full-domain", goal="",
+                                                   dc="dc01")).get_json()["id"]
+    s = _wait_status(client, run_id, {"done", "error"}, timeout=15)
+    assert s["status"] == "done", s.get("error")
+    index = client.get(f"/api/runs/{run_id}/report_html").get_data(as_text=True)
+    import re
+    m = re.search(r"href='([^']+\.report\.html)'", index)
+    assert m, "no per-host link found in index"
+    per_host = client.get(f"/api/runs/{run_id}/{m.group(1)}")
+    assert per_host.status_code == 200 and "smbenum" in per_host.get_data(as_text=True)
+    # traversal is refused
+    assert client.get(f"/api/runs/{run_id}/..%5Csecret.txt").status_code in (400, 404)

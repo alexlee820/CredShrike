@@ -182,6 +182,8 @@
     <div id="runView" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
       <div class="kv" id="kv"></div>
       <div class="bar"><i id="budgetBar"></i></div>
+      <button class="secondary hidden" id="showMoreBtn"
+              style="margin:6px 0">▲ show more (0 older)</button>
       <div id="live"></div>
       <div class="btnrow">
         <button class="secondary" id="stopBtn">Stop</button>
@@ -198,7 +200,9 @@
   </section>
 </main>
 <script>
-let runId = null, timer = null;
+let runId = null, timer = null, allLines = [], visibleCount = 100;
+
+$('showMoreBtn').onclick = () => { visibleCount += 500; renderLive(); };
 
 const $ = id => document.getElementById(id);
 
@@ -252,6 +256,26 @@ $('followBtn').onclick = async () => {
   $('followup').value = '';
 };
 
+function renderLive() {
+  const live = $('live');
+  const atBottom = live.scrollHeight - live.scrollTop - live.clientHeight < 60;
+  const shown = allLines.slice(-visibleCount);
+  live.innerHTML = shown.map(l => {
+    const cls = l.includes('★ HIT') || l.includes('hit(s)') ? 'hit'
+              : l.includes('!') || l.includes('ERROR') ? 'err'
+              : l.startsWith('  →') || l.startsWith('  ←') ? 'call'
+              : l.startsWith('  ⋮') ? 'walk' : '';
+    return `<div class="${cls}">${l.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`;
+  }).join('');
+  const older = allLines.length - shown.length;
+  const btn = $('showMoreBtn');
+  if (older > 0) {
+    btn.classList.remove('hidden');
+    btn.textContent = `▲ show more (${older} older)`;
+  } else btn.classList.add('hidden');
+  if (atBottom) live.scrollTop = live.scrollHeight;
+}
+
 async function poll() {
   if (!runId) return;
   const s = await (await fetch(`/api/runs/${runId}`)).json();
@@ -261,16 +285,8 @@ async function poll() {
     `${s.context.principal} · ${s.context.auth_type} · gate=${s.context.read_gate}` +
     ` · dir=${s.context.domain_source} · ${s.context.model} @ ${s.context.endpoint}` +
     (s.context.thinking === 'off' ? ' (thinking off)' : '');
-  const live = $('live');
-  const atBottom = live.scrollHeight - live.scrollTop - live.clientHeight < 40;
-  live.innerHTML = (s.lines || []).map(l => {
-    const cls = l.includes('★ HIT') || l.includes('hit(s)') ? 'hit'
-              : l.includes('!') || l.includes('ERROR') ? 'err'
-              : l.startsWith('  →') || l.startsWith('  ←') ? 'call'
-              : l.startsWith('  ⋮') ? 'walk' : '';
-    return `<div class="${cls}">${l.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`;
-  }).join('');
-  if (atBottom) live.scrollTop = live.scrollHeight;
+  allLines = s.lines || [];
+  renderLive();
   if (s.budget) {
     const pct = Math.min(100, 100 * s.budget.tool_calls / s.budget.max_tool_calls);
     $('budgetBar').style.width = pct + '%';

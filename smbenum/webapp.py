@@ -65,6 +65,11 @@ class RunState:
         self.lock = threading.Lock()
 
     def push(self, line: str) -> None:
+        # cap stored line length: debug-mode tool results can be 40K+ chars
+        # per line — raw storage would blow up the polling payload and the
+        # browser render
+        if len(line) > 4000:
+            line = line[:4000] + " …[line truncated — full copy in the report's Debug tab]"
         with self.lock:
             self.lines.append(line)
             if len(self.lines) > 5000:
@@ -74,7 +79,7 @@ class RunState:
         session = self.session
         return {
             "id": self.id, "status": self.status, "created": self.created,
-            "lines": self.lines[-800:],
+            "lines": self.lines[-300:],
             "report": self.report, "error": self.error,
             "report_html": self.report_html_path or None,
             "audit_path": self.audit_path,
@@ -341,6 +346,24 @@ def report_html(run_id):
     if state is None or not state.report_html_path or not os.path.exists(state.report_html_path):
         return jsonify({"error": "no report yet"}), 404
     with open(state.report_html_path, "r", encoding="utf-8") as fh:
+        return Response(fh.read(), mimetype="text/html")
+
+
+@app.route("/api/runs/<run_id>/<path:filename>")
+def run_artifact(run_id, filename):
+    """Serve sibling artifacts of a run's report (full-domain index links to
+    per-host reports with relative hrefs — under this route they resolve to
+    /api/runs/<id>/<file>, which lands here). Basenames only, no traversal."""
+    state = RUNS.get(run_id)
+    if state is None:
+        return jsonify({"error": "unknown run"}), 404
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return jsonify({"error": "bad path"}), 400
+    base = os.path.dirname(state.report_html_path or "") or state.audit_path
+    target = os.path.join(base, filename)
+    if not os.path.isfile(target):
+        return jsonify({"error": "not found"}), 404
+    with open(target, "r", encoding="utf-8") as fh:
         return Response(fh.read(), mimetype="text/html")
 
 

@@ -243,7 +243,8 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
             entry["html"] = os.path.basename(html_path)
             entry["status"] = "done"
             echo(f"[domain] {host}: done — {len(entry['findings'])} finding(s), "
-                 f"{entry['tool_calls']} calls, report {entry['html']}")
+                 f"{entry['tool_calls']} calls, report "
+                 f"{os.path.join(run_dir, entry['html'])}")
         except Exception as exc:  # noqa: BLE001 - one host must not kill the sweep
             entry["status"] = "error"
             entry["error"] = f"{type(exc).__name__}: {exc}"

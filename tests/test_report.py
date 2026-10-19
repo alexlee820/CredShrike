@@ -131,3 +131,22 @@ def test_report_debug_tab_only_when_debug_results():
         {"tool": "domain_list_computers", "args": {"source": "adws"},
          "chars": 42, "content": '{"source": "adws", "computers": []}'}])
     assert "data-tab=\"debug\"" in dbg and "adws" in dbg and "domain_list_computers" in dbg
+
+
+def test_long_values_do_not_break_layout():
+    long_secret = "S" * 500
+    html_out = build_report_html(
+        context={"principal": "x"}, findings=[{"severity": "high",
+            "category": "credential", "host": "h", "share": "s", "path": "p",
+            "username": "u" * 400, "secret": long_secret,
+            "evidence": "e" * 1000, "note": ""}],
+        scan_results=[], flagged=[], report_md="", audit_path="",
+        debug_results=[{"tool": "t", "args": {}, "chars": 99999,
+                        "content": "z" * 60000}])
+    # masked view is compact regardless of secret length
+    import re
+    masked = re.search(r"<span class='secret'[^>]*>([^<]*)</span>", html_out).group(1)
+    assert len(masked) < 40 and "500 chars" in masked
+    assert html_out.count("overflow-wrap:anywhere") >= 1     # wrap-safe CSS present
+    # debug content capped, not fully rendered
+    assert "z" * 60000 not in html_out

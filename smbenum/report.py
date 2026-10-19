@@ -34,10 +34,20 @@ def _esc(value) -> str:
     return html.escape(str(value if value is not None else ""))
 
 
+def _esc_cap(value, cap: int = 160) -> str:
+    text = _esc(value)
+    if len(text) > cap:
+        return text[:cap] + "…"
+    return text
+
+
 def _secret_cell(value: Optional[str]) -> str:
     if not value:
         return "<td class='dim'>—</td>"
-    masked = value[0] + "•" * max(len(value) - 1, 3) if len(value) > 1 else "•••"
+    if len(value) > 120:   # long secret: masked view shows head + count
+        masked = value[:2] + "•" * 10 + f" ({len(value)} chars)"
+    else:
+        masked = value[0] + "•" * max(len(value) - 1, 3) if len(value) > 1 else "•••"
     return (f"<td><span class='secret' data-real='{_esc(value)}'>{_esc(masked)}</span>"
             f" <button class='reveal' onclick='reveal(this)'>show</button></td>")
 
@@ -117,7 +127,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
         f"<div class='turn'><div class='who'>{_esc(i + 1)}. {_esc(d['tool'])} "
         f"<span class='dim'>({d['chars']} chars)</span></div>"
         f"<div class='mono dim'>{_esc(json.dumps(d['args'], ensure_ascii=False)[:200])}</div>"
-        f"<pre class='report'>{_esc(d['content'])}</pre></div>"
+        f"<pre class='report'>{_esc_cap(d['content'], 20000)}</pre></div>"
         for i, d in enumerate(debug_results)) or \
         "<p class='dim'>debug mode was off for this run</p>"
 
@@ -147,14 +157,14 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
         f"<tr><td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
         f"<td>{_esc(f.get('username') or '—')}</td>{_secret_cell(f.get('secret'))}"
         f"<td class='path'>{_esc(f.get('host'))}/{_esc(f.get('share'))}/{_esc(f.get('path'))}</td>"
-        f"<td class='dim ev'>{_esc(f.get('evidence'))}</td></tr>"
+        f"<td class='dim ev'>{_esc_cap(f.get('evidence'))}</td></tr>"
         for f in cred_findings) or "<tr><td colspan='5' class='dim'>none</td></tr>"
 
     findings_rows = "".join(
         f"<tr><td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
         f"<td>{_esc(f['category'])}</td>"
         f"<td class='path'>{_esc(f.get('host'))}/{_esc(f.get('share'))}/{_esc(f.get('path'))}</td>"
-        f"<td>{_esc(f.get('note'))}</td><td class='dim ev'>{_esc(f.get('evidence'))}</td></tr>"
+        f"<td>{_esc_cap(f.get('note'))}</td><td class='dim ev'>{_esc_cap(f.get('evidence'))}</td></tr>"
         for f in findings) or "<tr><td colspan='5' class='dim'>none</td></tr>"
 
     hits_rows = "".join(
@@ -214,6 +224,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   th, td {{ padding:7px 10px; text-align:left; border-bottom:1px solid var(--line); font-size:13px; }}
   th {{ color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.5px;
        background:#12171d; }}
+  td, th, pre, .path, .mono, .secret, .say, .call, .ev {{
+      overflow-wrap:anywhere; word-break:break-word; max-width:520px; }}
   tr:last-child td {{ border-bottom:0; }}
   .dim {{ color:var(--dim); }} .mono {{ font-family:Consolas,monospace; font-size:12px; }}
   .path {{ font-family:Consolas,monospace; font-size:12px; color:#b9d4f0; }}
@@ -416,7 +428,7 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
         f"<td>{(h.get('bytes_read', 0) / 1024):.0f}K</td>"
         f"<td>{len(h.get('findings', []))}</td>"
         f"{_link_cell(h)}"
-        f"<td class='dim'>{_esc(h.get('error', '') or '')}</td></tr>"
+        f"<td class='dim'>{_esc_cap(h.get('error', '') or '', 120)}</td></tr>"
         for h in hosts)
 
     cred_rows = ""
