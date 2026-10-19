@@ -208,7 +208,8 @@ $('authType').onchange = () => {
   $('f_' + t).classList.remove('hidden');
 };
 $('preset').onchange = () =>
-  $('goalWrap').style.display = ['snaffler','full'].includes($('preset').value) ? 'none' : '';
+  $('goalWrap').style.display =
+    ['snaffler','full','full-domain'].includes($('preset').value) ? 'none' : '';
 
 $('startBtn').onclick = async () => {
   const params = {
