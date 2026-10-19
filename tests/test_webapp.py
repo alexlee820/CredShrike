@@ -218,3 +218,35 @@ def test_full_preset_goal(client, fake_client):
     first_user = fake_client.messages.requests[0]["messages"][0]
     assert "FULL-CONTENT review" in str(first_user.get("content", ""))
     assert "smb_dump_share" in str(first_user.get("content", ""))
+
+
+def test_full_domain_webapp_path(client, monkeypatch):
+    """Regression: the web full-domain branch must import the orchestrator
+    from the right package (smbenum.agent.orchestrator, not smbenum.orchestrator)."""
+    import smbenum.agent.orchestrator as orch
+    from test_agent import FakeSMB
+    from smbenum.domain.base import ComputerRecord
+    import smbenum.agent.session as session_mod
+    monkeypatch.setattr(session_mod.AgentSession, "smb",
+                        lambda self, host: FakeSMB())
+    monkeypatch.setattr(orch, "_resolve_computers",
+                        lambda *a, **k: [ComputerRecord(cn="WS01", dns_name="ws01.corp.local")])
+    monkeypatch.setattr(orch, "_port_open", lambda host, port=445, timeout=3: True)
+
+    calls = {"n": 0}
+
+    class Ok:
+        def create(self, **kw):
+            calls["n"] += 1
+            return SimpleNamespace(stop_reason="end_turn",
+                                   content=[SimpleNamespace(type="text", text="ok")])
+
+    monkeypatch.setattr(webapp, "_client_factory", lambda: SimpleNamespace(messages=Ok()))
+
+    run_id = client.post("/api/runs", json=_params(preset="full-domain", goal="",
+                                                   dc="dc01")).get_json()["id"]
+    s = _wait_status(client, run_id, {"done", "error"}, timeout=15)
+    assert s["status"] == "done", s.get("error")
+    assert s["report_html"] and "index.html" in s["report_html"]
+    page = client.get(f"/api/runs/{run_id}/report_html")
+    assert page.status_code == 200 and "Coverage matrix" in page.get_data(as_text=True)

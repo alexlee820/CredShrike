@@ -124,7 +124,7 @@ def _execute_run(state: RunState) -> None:
         effective_preset = params.get("preset") or \
             ("" if params.get("goal") else "full-domain")
         if effective_preset == "full-domain":
-            from .orchestrator import run_domain_sweep
+            from .agent.orchestrator import run_domain_sweep
             summary = run_domain_sweep(
                 credential=credential, policy=policy,
                 audit_dir=params.get("audit_dir") or "runs",
