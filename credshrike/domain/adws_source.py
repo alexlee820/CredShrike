@@ -79,6 +79,8 @@ class AdwsSource:
             from ..krbutil import ensure_kdc
             ensure_kdc(cred)
         try:
+            LOG.info("[ADWS] connecting to %s:9389 (net.tcp, %s auth)",
+                     self.dc, cred.auth_type.value)
             if cred.auth_type in (AuthType.PASSWORD, AuthType.NTLM):
                 # vendored NTLMAuth takes the BARE NT hash (its .nt feeds NNS)
                 hashes = cred.nthash if cred.auth_type is AuthType.NTLM else None

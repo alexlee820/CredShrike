@@ -86,6 +86,7 @@ class LdapSource:
         if self.credential.is_kerberos:
             from ..krbutil import ensure_kdc
             ensure_kdc(self.credential)
+        LOG.info("[LDAP] connecting to %s (%s)", self.dc, scheme)
         conn = ldap_impacket.LDAPConnection(url, "")
         cred = self.credential
         cred.validate()

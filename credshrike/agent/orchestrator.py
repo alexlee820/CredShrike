@@ -276,6 +276,11 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     computers = _resolve_computers(credential, dc, domain_source,
                                    computers_filter, source_override)
     hosts = [c.dns_name or c.cn for c in computers]
+    # explicit transport announcement in the log
+    transport = "adws (net.tcp 9389)" if domain_source == "adws" else \
+               f"ldap (389) [{domain_source}]" if domain_source == "ldap" else \
+               f"auto → ldap (389) [requested: {domain_source}]"
+    echo(f"[domain] TRANSPORT: {transport} — querying domain computers")
     if max_hosts:
         hosts = hosts[:max_hosts]
     echo(f"[domain] {len(computers)} computer(s) in scope — sweeping {len(hosts)}"

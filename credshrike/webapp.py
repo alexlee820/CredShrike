@@ -215,6 +215,9 @@ def _emit_report(loop, session, policy, audit, client, report_md: str) -> str:
 
 
 def _fmt_event(kind: str, data: dict) -> str:
+    if kind == "transport":
+        return (f"  ◆ TRANSPORT: using [{data.get('using','?').upper()}] "
+                f"for {data.get('query','?')} (requested: {data.get('requested','?')})")
     if kind == "walk":
         return f"  ⋮ walk {data.get('path') or '/'}"
     if kind == "scan":

@@ -62,6 +62,7 @@
   #live .err { color:var(--err); }
   #live .call { color:var(--acc); }
   #live .walk { color:var(--dim); }
+  #live .transport { color:#43d17c; font-weight:600; }
 
   .bottom { display:grid; grid-template-columns:2fr 1fr; gap:12px; margin-top:12px;
     flex:1; min-height:0; }
@@ -107,9 +108,9 @@
       </div>
       <div class="field"><label>Directory source</label>
         <select id="domainSource">
-          <option value="auto">auto (LDAP)</option>
-          <option value="ldap">ldap — 389</option>
           <option value="adws">adws — net.tcp 9389</option>
+          <option value="ldap">ldap — 389</option>
+          <option value="auto">auto (LDAP fallback)</option>
         </select>
       </div>
       <div class="field full" id="goalWrap"><label>Goal</label>
@@ -273,6 +274,7 @@ function renderLive() {
   const shown = allLines.slice(-visibleCount);
   live.innerHTML = shown.map(l => {
     const cls = l.includes('★ HIT') || l.includes('hit(s)') ? 'hit'
+              : l.includes('TRANSPORT') ? 'transport'
               : l.includes('!') || l.includes('ERROR') ? 'err'
               : l.startsWith('  →') || l.startsWith('  ←') ? 'call'
               : l.startsWith('  ⋮') ? 'walk' : '';

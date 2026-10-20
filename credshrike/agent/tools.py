@@ -40,7 +40,11 @@ def _obj(properties: dict, required: list[str]) -> dict:
 def _domain_list_computers(ctx: AgentSession, args: dict) -> Any:
     # model's per-call choice wins; otherwise the session-level config
     # (CLI --source / web UI dropdown) is the default
-    source = ctx.directory(args.get("source") or ctx.domain_source or "auto")
+    chosen = args.get("source") or ctx.domain_source or "auto"
+    source = ctx.directory(chosen)
+    ctx.emit("transport", {"query": "domain computers",
+                           "using": source.name,
+                           "requested": chosen})
     computers = [c.to_dict() for c in source.list_computers(args.get("filter", "") or "")]
     # harness-side inventory for the HTML report (dedupe by sam/dns/cn)
     seen = {c.get("sam_account") or c.get("dns_name") or c.get("cn")
