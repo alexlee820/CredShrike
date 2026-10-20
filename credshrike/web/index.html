@@ -80,6 +80,11 @@
   .status { font-size:12px; padding:2px 10px; border-radius:10px; white-space:nowrap; }
   .status.running { background:#20344a; color:var(--acc); }
   .starttime { font-size:11px; color:var(--dim); margin-left:10px; }
+  .transport-badge { display:inline-block; padding:2px 10px; border-radius:10px;
+    font-size:12px; font-weight:700; margin-left:8px; letter-spacing:.5px; }
+  .transport-badge.adws { background:#1a3a2a; color:#43d17c; border:1px solid #2d5a40; }
+  .transport-badge.ldap { background:#1a2a4a; color:#4da3ff; border:1px solid #2d4a6a; }
+  .transport-badge.auto { background:#3a3520; color:#ffb84d; border:1px solid #5a5030; }
   .status.done { background:#16351f; color:var(--ok); }
   .status.error { background:#3d1c1c; color:var(--err); }
   .status.stopped { background:#3a2f16; color:var(--warn); }
@@ -305,10 +310,17 @@ async function poll() {
   const badgeWrap = $('runBadgeWrap');
   badgeWrap.innerHTML = `<span class="status ${s.status}">${s.status}</span>`
     + (s.created ? `<span class="starttime">since ${new Date(s.created * 1000).toLocaleTimeString()}</span>` : '');
-  if (s.context) $('ctxLine').textContent =
-    `${s.context.principal} · ${s.context.auth_type} · gate=${s.context.read_gate}` +
-    ` · dir=${s.context.domain_source} · ${s.context.model} @ ${s.context.endpoint}` +
-    (s.context.thinking === 'off' ? ' (thinking off)' : '');
+  if (s.context) {
+    const t = s.context.domain_source || 'auto';
+    const tLabel = t === 'adws' ? 'ADWS · net.tcp 9389' :
+                   t === 'ldap' ? 'LDAP · port 389' : 'AUTO → LDAP';
+    $('ctxLine').innerHTML =
+      `<b style="color:var(--fg)">${s.context.principal}</b>` +
+      ` · ${s.context.auth_type} · gate=${s.context.read_gate}` +
+      ` · ${s.context.model} @ ${s.context.endpoint}` +
+      (s.context.thinking === 'off' ? ' (thinking off)' : '') +
+      ` <span class="transport-badge ${t}">${tLabel}</span>`;
+  }
   allLines = s.lines || [];
   renderLive();
   if (s.budget) {
@@ -316,7 +328,9 @@ async function poll() {
     $('budgetBar').style.width = pct + '%';
     const ctx = s.context_limit
       ? `<span>context <b>${(s.context_tokens/1000).toFixed(1)}K/${(s.context_limit/1000).toFixed(0)}K</b></span>` : '';
+    const t2 = (s.context && s.context.domain_source) || 'auto';
     $('kv').innerHTML =
+      `<span class="transport-badge ${t2}" style="font-size:11px">${t2.toUpperCase()}</span>` +
       `<span>calls <b>${s.budget.tool_calls}/${s.budget.max_tool_calls}</b></span>` +
       `<span>read <b>${(s.budget.bytes_read/1024).toFixed(0)}/${(s.budget.max_total_read_bytes/1048576).toFixed(0)} MiB</b></span>` + ctx +
       `<span>elapsed <b>${s.budget.elapsed_s}s</b></span>` +
