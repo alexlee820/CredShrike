@@ -79,6 +79,7 @@
 
   .status { font-size:12px; padding:2px 10px; border-radius:10px; white-space:nowrap; }
   .status.running { background:#20344a; color:var(--acc); }
+  .starttime { font-size:11px; color:var(--dim); margin-left:10px; }
   .status.done { background:#16351f; color:var(--ok); }
   .status.error { background:#3d1c1c; color:var(--err); }
   .status.stopped { background:#3a2f16; color:var(--warn); }
@@ -302,7 +303,8 @@ async function poll() {
   if (!runId) return;
   const s = await (await fetch(`/api/runs/${runId}`)).json();
   const badgeWrap = $('runBadgeWrap');
-  badgeWrap.innerHTML = `<span class="status ${s.status}">${s.status}</span>`;
+  badgeWrap.innerHTML = `<span class="status ${s.status}">${s.status}</span>`
+    + (s.created ? `<span class="starttime">since ${new Date(s.created * 1000).toLocaleTimeString()}</span>` : '');
   if (s.context) $('ctxLine').textContent =
     `${s.context.principal} · ${s.context.auth_type} · gate=${s.context.read_gate}` +
     ` · dir=${s.context.domain_source} · ${s.context.model} @ ${s.context.endpoint}` +
