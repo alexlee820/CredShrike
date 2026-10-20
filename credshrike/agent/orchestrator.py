@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import re
 import socket
+import threading
 import time
 from typing import Callable, Optional
 
@@ -162,11 +163,11 @@ def merge_findings(all_findings: list[dict]) -> dict:
 
 def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
                     policy: Policy, dc: str, domain_source: str, computers: list,
-                    client_factory, echo) -> None:
+                    client_factory, echo, api_semaphore: Optional[threading.Semaphore] = None) -> None:
     """Sweep ONE host end-to-end (fresh context): audit log → deterministic
     dump embedded in the goal → analysis loop → findings extraction →
-    per-host HTML report. Raises on failure; entry fields are filled on
-    success. The caller handles retries and error recording."""
+    per-host HTML report. The api_semaphore throttles concurrent LLM calls
+    (GLM typically allows 1; Anthropic can handle more). Raises on failure."""
     from .audit import AuditLog
     from .findings import extract_findings
     from .loop import AgentLoop
@@ -178,6 +179,8 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
     session = AgentSession(credential, policy, audit, hosts=[host],
                            dc=dc, domain_source=domain_source)
     try:
+        # Phase 1: SMB dump — parallel, no LLM, no semaphore needed
+        echo(f"[domain] {host}: dumping shares...")
         dump_text, incomplete, dump_stats = _render_dump_for_goal(session, host, policy, echo)
         entry["dump_stats"] = dump_stats
         incomplete_note = ("\nNOTE — dump incomplete: " + "; ".join(incomplete)
@@ -187,8 +190,21 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         entry["shares"] = session.share_inventories.get(host, [])
         entry["bytes_read"] = session.budget.bytes_read  # includes the dump
 
-        loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
-        report_md = loop.run(goal)
+        # Phase 2: LLM analysis — acquire API semaphore (queued if busy)
+        if api_semaphore is not None:
+            echo(f"[domain] {host}: dump done ({dump_stats['files_dumped']} files, "
+                 f"{dump_stats['bytes_read']//1024}K) — waiting for API slot...")
+            api_semaphore.acquire()
+            try:
+                echo(f"[domain] {host}: API slot acquired — analyzing...")
+                loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
+                report_md = loop.run(goal)
+            finally:
+                api_semaphore.release()
+                echo(f"[domain] {host}: API slot released")
+        else:
+            loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
+            report_md = loop.run(goal)
         entry["report_md"] = report_md
         try:
             entry["findings"] = extract_findings(client_factory(), policy, loop.messages)
@@ -226,7 +242,8 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
 
 def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
-                           domain_source, computers, client_factory, echo):
+                           domain_source, computers, client_factory, echo,
+                           api_semaphore=None):
     """Sweep one host with transient-error retry (shared by sequential and
     parallel paths). Fills entry fields on success; records errors."""
     echo(f"[domain] {host}: START sweep")
@@ -240,7 +257,8 @@ def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                          html="", tool_calls=0, bytes_read=0, shares=[])
         try:
             _sweep_one_host(entry, host, run_dir, credential, policy, dc,
-                            domain_source, computers, client_factory, echo)
+                            domain_source, computers, client_factory, echo,
+                            api_semaphore=api_semaphore)
             return
         except Exception as exc:  # noqa: BLE001
             message = str(exc).lower()
@@ -288,7 +306,19 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
          + (f" (concurrency={concurrency})" if concurrency > 1 else ""))
     if concurrency > 1:
         echo(f"[domain] PARALLEL: hosts will interleave in the log below — "
-             f"look for [N/M] prefixes from different hosts appearing together")
+             f"SMB dumps run concurrently; LLM analysis queues on an API semaphore")
+
+    # API semaphore: limits concurrent LLM calls. GLM plans typically allow
+    # 1; the semaphore prevents 429 storms that make parallel look sequential
+    api_concurrency = 1  # safe default for GLM; increase for Anthropic
+    if policy.api_base_url and "anthropic.com" not in policy.api_base_url:
+        api_concurrency = 1  # third-party endpoints: assume strict limits
+    else:
+        api_concurrency = min(concurrency, 3)  # official API: allow some parallel
+    api_semaphore = threading.Semaphore(api_concurrency) if concurrency > 1 else None
+    if api_semaphore:
+        echo(f"[domain] API semaphore: {api_concurrency} concurrent LLM call(s) max "
+             f"(prevents rate-limit storms; SMB dumps still fully parallel)")
 
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     run_dir = os.path.join(audit_dir, f"domain_{stamp}")
@@ -317,7 +347,8 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
             return entry
         echo(f"[domain] ({index}/{len(hosts)}) {host}: sweeping")
         _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
-                               domain_source, computers, client_factory, echo)
+                               domain_source, computers, client_factory, echo,
+                               api_semaphore=api_semaphore)
         return entry
 
     if concurrency <= 1:
