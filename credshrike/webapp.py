@@ -70,8 +70,12 @@ class RunState:
         # browser render
         if len(line) > 4000:
             line = line[:4000] + " …[line truncated — full copy in the report's Debug tab]"
+        # prefix every line with elapsed time since run start (mm:ss)
+        elapsed = int(time.time() - self.created)
+        stamp = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        stamped = f"[{stamp}] {line}"
         with self.lock:
-            self.lines.append(line)
+            self.lines.append(stamped)
             if len(self.lines) > 5000:
                 del self.lines[:1000]
 
