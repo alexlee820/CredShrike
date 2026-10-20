@@ -137,6 +137,7 @@ def _execute_run(state: RunState) -> None:
                 domain_source=params.get("domain_source") or "auto",
                 computers_filter=params.get("computers_filter") or "",
                 max_hosts=int(params["max_hosts"]) if params.get("max_hosts") else None,
+                concurrency=int(params.get("concurrency") or 1),
                 client_factory=lambda: (_client_factory() if _client_factory
                                         else _build_client(params)),
                 echo=state.push)

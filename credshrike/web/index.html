@@ -173,6 +173,8 @@
           <input id="computersFilter" placeholder="(operatingSystem=*Server*)"/></div>
         <div class="field"><label>Max hosts (full-domain, 0 = all)</label>
           <input id="maxHosts" type="number" placeholder="0"/></div>
+        <div class="field"><label>Concurrency (parallel hosts, 1 = sequential)</label>
+          <input id="concurrency" type="number" placeholder="1"/></div>
       </div>
     </details>
 
@@ -245,6 +247,7 @@ $('startBtn').onclick = async () => {
     context_limit: $('contextLimit').value || 0,
     computers_filter: $('computersFilter').value.trim(),
     max_hosts: $('maxHosts').value || 0,
+    concurrency: $('concurrency').value || 1,
   };
   const r = await fetch('/api/runs', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify(params)});

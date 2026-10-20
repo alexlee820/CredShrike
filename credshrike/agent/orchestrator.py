@@ -225,22 +225,50 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             pass
 
 
+def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
+                           domain_source, computers, client_factory, echo):
+    """Sweep one host with transient-error retry (shared by sequential and
+    parallel paths). Fills entry fields on success; records errors."""
+    transient_markers = ("no answer", "connection reset", "broken pipe",
+                         "unpack requires", "timed out", "timeout")
+    for attempt in (1, 2):
+        if attempt == 2:
+            echo(f"[domain] {host}: transient error — retrying once")
+            time.sleep(3)
+            entry.update(status="pending", error="", findings=[], report_md="",
+                         html="", tool_calls=0, bytes_read=0, shares=[])
+        try:
+            _sweep_one_host(entry, host, run_dir, credential, policy, dc,
+                            domain_source, computers, client_factory, echo)
+            return
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).lower()
+            if attempt == 1 and any(m in message for m in transient_markers):
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+                continue
+            entry["status"] = "error"
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            echo(f"[domain] {host}: ERROR — {entry['error'][:200]}")
+            return
+
+
 def run_domain_sweep(*, credential: Credential, policy: Policy,
                      audit_dir: str = "runs", dc: str = "", domain_source: str = "auto",
                      computers_filter: str = "", max_hosts: Optional[int] = None,
                      client_factory: Optional[Callable] = None, echo=print,
-                     source_override=None, reachable_check: Optional[Callable] = None) -> dict:
+                     source_override=None, reachable_check: Optional[Callable] = None,
+                     concurrency: int = 1) -> dict:
+    """Sweep a domain. concurrency=1 (default) is sequential; concurrency>1
+    uses a ThreadPoolExecutor — each host still gets its own context window,
+    its own audit log, its own LLM client; only the host-level orchestration
+    runs in parallel."""
     # resolve at CALL time so monkeypatching module attributes works (a
     # default-arg binding would freeze the original function and make tests
     # environment-dependent)
     if reachable_check is None:
         reachable_check = _port_open
     from .audit import AuditLog
-    from .cli_agent import FULL_PRESET, _make_client
-    from .findings import extract_findings
-    from .loop import AgentLoop
-    from .session import AgentSession
-    from ..report import write_domain_index, write_report
+    from .cli_agent import _make_client
 
     if client_factory is None:
         client_factory = lambda: _make_client(policy)  # noqa: E731
@@ -250,7 +278,8 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     hosts = [c.dns_name or c.cn for c in computers]
     if max_hosts:
         hosts = hosts[:max_hosts]
-    echo(f"[domain] {len(computers)} computer(s) in scope — sweeping {len(hosts)}")
+    echo(f"[domain] {len(computers)} computer(s) in scope — sweeping {len(hosts)}"
+         + (f" (concurrency={concurrency})" if concurrency > 1 else ""))
 
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     run_dir = os.path.join(audit_dir, f"domain_{stamp}")
@@ -258,53 +287,52 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
 
     started = time.time()
     results: list[dict] = []
-    total_calls = 0
-    for index, host in enumerate(hosts, 1):
+
+    def _work(index_host):
+        index, host = index_host
         entry = {"host": host, "status": "pending", "error": "", "shares": [],
                  "findings": [], "report_md": "", "audit_path": "", "html": "",
                  "tool_calls": 0, "bytes_read": 0}
-        results.append(entry)
-
-        total_bytes = sum(r["bytes_read"] for r in results)
+        # pre-checks (budget gate + reachability)
+        total_bytes = sum(r["bytes_read"] for r in results if r.get("bytes_read"))
+        total_calls = sum(r["tool_calls"] for r in results if r.get("tool_calls"))
         if total_calls >= policy.max_tool_calls or \
                 total_bytes >= policy.max_total_read_bytes or \
                 time.time() - started > policy.wall_clock_seconds:
             entry["status"] = "skipped-budget"
-            echo(f"[domain] ({index}/{len(hosts)}) {host}: SKIPPED — global budget "
-                 f"({total_calls} calls / {total_bytes // 1024}K read) exhausted")
-            continue
+            echo(f"[domain] {host}: SKIPPED — global budget exhausted")
+            return entry
         if not reachable_check(host):
             entry["status"] = "unreachable"
-            echo(f"[domain] ({index}/{len(hosts)}) {host}: SMB 445 unreachable — skipped")
-            continue
-
+            echo(f"[domain] {host}: SMB 445 unreachable — skipped")
+            return entry
         echo(f"[domain] ({index}/{len(hosts)}) {host}: sweeping")
-        session = None
-        # one retry on transient KDC/network errors ('No answer!', resets) —
-        # pass-the-ticket paths ask the KDC for a per-host TGS and lab KDC
-        # connections occasionally drop
-        transient_markers = ("no answer", "connection reset", "broken pipe",
-                             "unpack requires", "timed out", "timeout")
-        for attempt in (1, 2):
-            if attempt == 2:
-                echo(f"[domain] {host}: transient error — retrying once")
-                time.sleep(3)
-                entry.update(status="pending", error="", findings=[], report_md="",
-                             html="", tool_calls=0, bytes_read=0, shares=[])
-            try:
-                _sweep_one_host(entry, host, run_dir, credential, policy, dc,
-                                domain_source, computers, client_factory, echo)
-                break   # success (or permanent error already recorded)
-            except Exception as exc:  # noqa: BLE001
-                message = str(exc).lower()
-                if attempt == 1 and any(m in message for m in transient_markers):
-                    entry["error"] = f"{type(exc).__name__}: {exc}"
-                    continue      # retry once
-                entry["status"] = "error"
-                entry["error"] = f"{type(exc).__name__}: {exc}"
-                echo(f"[domain] {host}: ERROR — {entry['error'][:200]}")
-                break
-        total_calls = sum(r["tool_calls"] for r in results)
+        _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
+                               domain_source, computers, client_factory, echo)
+        return entry
+
+    if concurrency <= 1:
+        for pair in enumerate(hosts, 1):
+            results.append(_work(pair))
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {pool.submit(_work, pair): pair[1] for pair in enumerate(hosts, 1)}
+            future_to_host = {f: h for f, h in futures.items()}
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as exc:  # noqa: BLE001 - host-level crash
+                    host = future_to_host[future]
+                    results.append({"host": host, "status": "error",
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                    "shares": [], "findings": [], "report_md": "",
+                                    "audit_path": "", "html": "",
+                                    "tool_calls": 0, "bytes_read": 0})
+                    echo(f"[domain] {host}: CRASH — {type(exc).__name__}: {exc}")
+        # restore host order (as_completed returns in completion order)
+        order = {h: i for i, h in enumerate(hosts)}
+        results.sort(key=lambda r: order.get(r["host"], len(hosts)))
 
     merged = merge_findings([f for r in results for f in r["findings"]])
     context = {"principal": credential.redacted()["principal"],
@@ -313,12 +341,14 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                "model": policy.model,
                "endpoint": policy.api_base_url or "api.anthropic.com"}
     index_path = os.path.join(run_dir, "index.html")
+    from ..report import write_domain_index
     write_domain_index(index_path, context=context, hosts=results,
                        merged=merged, computers=[c.to_dict() for c in computers])
 
     done = sum(1 for r in results if r["status"] == "done")
     n_creds = len(merged["credentials"])
+    elapsed = int(time.time() - started)
     echo(f"[domain] sweep complete: {done}/{len(results)} hosts swept, "
-         f"{n_creds} unique credential(s) — index: {index_path}")
+         f"{n_creds} unique credential(s), {elapsed}s — index: {index_path}")
     return {"hosts": results, "merged": merged, "index_html": index_path,
             "run_dir": run_dir, "computers": [c.to_dict() for c in computers]}

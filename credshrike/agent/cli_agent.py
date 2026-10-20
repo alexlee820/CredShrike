@@ -153,7 +153,8 @@ def cmd_agent(args) -> None:
                          audit_dir=args.audit_dir, dc=args.dc or "",
                          domain_source=args.source,
                          computers_filter=args.computers_filter or "",
-                         max_hosts=args.max_hosts or None)
+                         max_hosts=args.max_hosts or None,
+                         concurrency=args.concurrency or 1)
         return
 
     session, policy, audit = _build_session(args)
@@ -252,6 +253,10 @@ def register(subparsers) -> None:
                         "'(operatingSystem=*Server*)'")
     p.add_argument("--max-hosts", type=int, default=None,
                    help="full-domain: cap the number of computers swept")
+    p.add_argument("--concurrency", type=int, default=1,
+                   help="full-domain: number of hosts swept in parallel "
+                        "(default 1 = sequential; try 3-4 for faster sweeps, "
+                        "mind SMB + API rate limits)")
     p.add_argument("--api-base-url", default=None,
                    help="Anthropic-compatible endpoint override, e.g. "
                         "https://api.deepseek.com/anthropic or the GLM /api/anthropic URL "
