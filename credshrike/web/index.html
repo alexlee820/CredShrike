@@ -63,6 +63,8 @@
   #live .call { color:var(--acc); }
   #live .walk { color:var(--dim); }
   #live .transport { color:#43d17c; font-weight:600; }
+  #live .parallel { color:#b68cff; font-weight:600; }
+  #live .waiting { color:#ffb84d; }
 
   .bottom { display:grid; grid-template-columns:2fr 1fr; gap:12px; margin-top:12px;
     flex:1; min-height:0; }
@@ -275,6 +277,8 @@ function renderLive() {
   live.innerHTML = shown.map(l => {
     const cls = l.includes('★ HIT') || l.includes('hit(s)') ? 'hit'
               : l.includes('TRANSPORT') ? 'transport'
+              : l.includes('PARALLEL') || l.includes('START sweep') ? 'parallel'
+              : l.includes('⏳') || l.includes('rate limited') ? 'waiting'
               : l.includes('!') || l.includes('ERROR') ? 'err'
               : l.startsWith('  →') || l.startsWith('  ←') ? 'call'
               : l.startsWith('  ⋮') ? 'walk' : '';

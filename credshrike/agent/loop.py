@@ -16,6 +16,7 @@ Anthropic API notes (per claude-api skill):
 from __future__ import annotations
 
 import logging
+import time as _time
 from typing import Callable, Optional
 
 from ..config import Policy
@@ -193,6 +194,10 @@ class AgentLoop:
             self.transcript.append({"kind": "tool_results", "items": transcript_items})
         return results
 
+    # max retries on rate-limit (429) with exponential backoff
+    RATE_LIMIT_RETRIES = 5
+    RATE_LIMIT_BASE_WAIT = 2   # seconds; doubles each retry
+
     def _create(self):
         kwargs = dict(
             model=self.policy.model,
@@ -205,7 +210,25 @@ class AgentLoop:
         # Anthropic-compatible endpoints (GLM/DeepSeek/...) may reject it
         if self.policy.thinking_mode != "off":
             kwargs["thinking"] = {"type": "adaptive"}
-        return self.client.messages.create(**kwargs)
+
+        last_error = None
+        for attempt in range(self.RATE_LIMIT_RETRIES):
+            try:
+                return self.client.messages.create(**kwargs)
+            except Exception as exc:  # noqa: BLE001
+                error_name = type(exc).__name__
+                error_text = str(exc).lower()
+                is_rate_limit = ("rate" in error_text or "429" in error_text
+                                 or "limit" in error_text or "overloaded" in error_text
+                                 or error_name == "RateLimitError")
+                if not is_rate_limit:
+                    raise              # not a rate limit — re-raise immediately
+                last_error = exc
+                wait = self.RATE_LIMIT_BASE_WAIT * (2 ** attempt)
+                self.echo(f"  ⏳ rate limited ({error_name}), retrying in {wait}s "
+                          f"(attempt {attempt + 1}/{self.RATE_LIMIT_RETRIES})")
+                _time.sleep(wait)
+        raise last_error  # exhausted retries
 
 
 def _short(args: dict, limit: int = 100) -> str:

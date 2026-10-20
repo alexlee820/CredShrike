@@ -229,6 +229,7 @@ def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                            domain_source, computers, client_factory, echo):
     """Sweep one host with transient-error retry (shared by sequential and
     parallel paths). Fills entry fields on success; records errors."""
+    echo(f"[domain] {host}: START sweep")
     transient_markers = ("no answer", "connection reset", "broken pipe",
                          "unpack requires", "timed out", "timeout")
     for attempt in (1, 2):
@@ -285,6 +286,9 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
         hosts = hosts[:max_hosts]
     echo(f"[domain] {len(computers)} computer(s) in scope — sweeping {len(hosts)}"
          + (f" (concurrency={concurrency})" if concurrency > 1 else ""))
+    if concurrency > 1:
+        echo(f"[domain] PARALLEL: hosts will interleave in the log below — "
+             f"look for [N/M] prefixes from different hosts appearing together")
 
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     run_dir = os.path.join(audit_dir, f"domain_{stamp}")

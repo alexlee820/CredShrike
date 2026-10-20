@@ -231,6 +231,8 @@ def _fmt_event(kind: str, data: dict) -> str:
                 f"truncated={data.get('truncated')}")
     if kind == "walk_error" or kind == "read_error":
         return f"  ! {kind}: {data.get('path')} — {data.get('error')}"
+    if kind == "rate_limited":
+        return f"  ⏳ rate limited, waiting {data.get('wait')}s (attempt {data.get('attempt')})"
     return f"  ⋮ {kind} {json.dumps(data, ensure_ascii=False)[:160]}"
 
 
