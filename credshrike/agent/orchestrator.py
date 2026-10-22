@@ -55,6 +55,31 @@ _HOST_ANALYSIS_PROMPT = (
     "5. Produce the final report citing paths from the dump.{incomplete}\n")
 
 
+_SHARE_ANALYSIS_PROMPT = (
+    "You are analyzing ONE SMB share on host {host}. Below is the COMPLETE "
+    "content of every file in share '{share}' ({n_files} files, {size_kb}K). "
+    "{memory_block}"
+    "Your job:\n"
+    "1. Read through the file contents and extract EVERY credential "
+    "(usernames, passwords, keys, tokens — including CSV/JSON plain rows).\n"
+    "2. Extract EVERY sensitive item: PII (names/emails/IDs/HR/health), "
+    "financial (bank cards/invoices/budgets/payroll), internal network "
+    "(IPs/hostnames/diagrams/VPN/DNS/inventory).\n"
+    "3. If entries are marked head_truncated and look interesting, note it.\n"
+    "4. Produce a brief summary of what you found (max 200 words).\n"
+    "5. List each finding as a structured entry.\n"
+    "{incomplete}\n")
+
+
+_SUMMARY_PROMPT = (
+    "Summarize what you found in this share for the NEXT share's analysis. "
+    "Keep it under 150 words. Include: usernames/passwords found (exact values), "
+    "file paths with notable content, patterns you noticed (e.g. 'secrets "
+    "folder contains .cred files'), and anything the next share should look "
+    "for based on what you've seen. Respond with ONLY the summary text, "
+    "no markdown formatting.")
+
+
 def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str, list]:
     """Deterministically dump EVERY share of one host (code-side, no LLM
     decisions) and render it as text to embed in the analysis goal. Returns
@@ -113,6 +138,70 @@ def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str
     return "\n".join(chunks), notes, dump_stats
 
 
+def _dump_single_share(session, host: str, share_name: str,
+                        policy: Policy, echo) -> tuple[str, dict]:
+    """Dump ONE share's contents as text (for per-share context windows).
+    Returns (share_dump_text, stats)."""
+    from ..scanner import dump_share
+
+    char_budget = int((policy.context_token_limit or 133000) * 3) \
+        if policy.context_token_limit else _DEFAULT_GOAL_CHAR_BUDGET
+    # per-share budget: a fraction of the total (host has multiple shares)
+    share_budget = char_budget // 2
+    bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
+
+    result = dump_share(
+        session.smb(host), share_name, "",
+        depth=policy.dump_depth,
+        per_file_bytes=policy.dump_per_file_bytes,
+        page_chars=share_budget,
+        max_files=policy.dump_max_files,
+        max_total_bytes=max(0, bytes_left),
+        on_event=lambda kind, data: echo(f"  ⋮ {kind} {data.get('path', '')}"
+                                         if isinstance(data, dict) else ""),
+    )
+    session.budget.bytes_read += int(result["stats"]["bytes_read"])
+
+    chunks = [f"=== SHARE {share_name} "
+              f"({result['stats']['files_dumped']} files) ==="]
+    for entry in result["files"]:
+        header = f"---- {entry['path']} ({entry['size']}B" \
+                 f"{' head_truncated' if entry['head_truncated'] else ''}) ----"
+        chunks.append(header + "\n" + entry["content"])
+
+    notes = ""
+    if result.get("truncated"):
+        notes = (f"\nNOTE: this share's dump was truncated "
+                 f"({result.get('stop_reason')}). Use smb_dump_share with "
+                 f"skip_files={result['stats']['files_dumped']} to see more.\n")
+    return "\n".join(chunks) + notes, result["stats"]
+
+
+def _generate_share_summary(client, policy, share_name: str,
+                            report_md: str, echo) -> str:
+    """Ask the LLM to produce a brief summary of what was found in this
+    share — this becomes the 'memory' injected into the next share's
+    context. Falls back to a truncated version of the report if the
+    summary call fails."""
+    try:
+        resp = client.messages.create(
+            model=policy.model,
+            max_tokens=500,
+            messages=[
+                {"role": "user",
+                 "content": f"Share: {share_name}\n\nYour findings:\n{report_md[:4000]}\n\n{_SUMMARY_PROMPT}"}
+            ],
+        )
+        text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+        if text:
+            echo(f"[share] {share_name}: summary generated ({len(text)} chars)")
+            return text
+    except Exception as exc:  # noqa: BLE001 - summary is best-effort
+        echo(f"[share] {share_name}: summary failed ({type(exc).__name__}), "
+             f"using truncated report")
+    return report_md[:500] + "..." if len(report_md) > 500 else report_md
+
+
 def _port_open(host: str, port: int = 445, timeout: float = 3.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout):
@@ -164,10 +253,11 @@ def merge_findings(all_findings: list[dict]) -> dict:
 def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
                     policy: Policy, dc: str, domain_source: str, computers: list,
                     client_factory, echo, api_semaphore: Optional[threading.Semaphore] = None) -> None:
-    """Sweep ONE host end-to-end (fresh context): audit log → deterministic
-    dump embedded in the goal → analysis loop → findings extraction →
-    per-host HTML report. The api_semaphore throttles concurrent LLM calls
-    (GLM typically allows 1; Anthropic can handle more). Raises on failure."""
+    """Sweep ONE host using PER-SHARE context windows: each share gets its
+    own fresh AgentLoop (small enough for 8K-32K models). After each share
+    is analyzed, the LLM generates a rolling summary that's injected into
+    the NEXT share's context (cross-share memory). No regex — the LLM reads
+    the actual file content and decides what's a credential."""
     from .audit import AuditLog
     from .findings import extract_findings
     from .loop import AgentLoop
@@ -179,40 +269,87 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
     session = AgentSession(credential, policy, audit, hosts=[host],
                            dc=dc, domain_source=domain_source)
     try:
-        # Phase 1: SMB dump — parallel, no LLM, no semaphore needed
-        echo(f"[domain] {host}: dumping shares...")
-        dump_text, incomplete, dump_stats = _render_dump_for_goal(session, host, policy, echo)
-        entry["dump_stats"] = dump_stats
-        incomplete_note = ("\nNOTE — dump incomplete: " + "; ".join(incomplete)
-                           if incomplete else "")
-        goal = _HOST_ANALYSIS_PROMPT.format(host=host,
-                                            incomplete=incomplete_note) + dump_text
-        entry["shares"] = session.share_inventories.get(host, [])
-        entry["bytes_read"] = session.budget.bytes_read  # includes the dump
+        # Get share list (code-side, fast)
+        shares = session.smb(host).list_shares()
+        session.share_inventories[host] = shares
+        entry["shares"] = shares
+        dumpable = [s for s in shares if not s.get("special")]
+        echo(f"[domain] {host}: {len(dumpable)} share(s) to analyze "
+             f"({', '.join(s['name'] for s in dumpable)})")
 
-        # Phase 2: LLM analysis — acquire API semaphore (queued if busy)
-        if api_semaphore is not None:
-            echo(f"[domain] {host}: dump done ({dump_stats['files_dumped']} files, "
-                 f"{dump_stats['bytes_read']//1024}K) — waiting for API slot...")
-            api_semaphore.acquire()
+        all_findings: list[dict] = []
+        all_reports: list[str] = []
+        memory = ""    # rolling summary from previous shares
+        total_dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
+                            "bytes_read": 0, "errors": 0}
+
+        for si, share_info in enumerate(dumpable, 1):
+            share_name = share_info["name"]
+
+            # Phase 1: dump THIS share only (code-side, parallel-safe)
+            echo(f"[share] ({si}/{len(dumpable)}) {host}/{share_name}: dumping...")
+            share_dump, share_stats = _dump_single_share(
+                session, host, share_name, policy, echo)
+            for key in total_dump_stats:
+                total_dump_stats[key] += share_stats.get(key, 0)
+            entry["bytes_read"] = session.budget.bytes_read
+            entry["dump_stats"] = dict(total_dump_stats)  # keep updated even on error
+
+            # Phase 2: fresh context window for THIS share
+            memory_block = (f"\nMEMORY from previous shares on {host}:\n{memory}\n\n"
+                            if memory else "")
+            goal = _SHARE_ANALYSIS_PROMPT.format(
+                host=host, share=share_name,
+                n_files=share_stats.get("files_dumped", 0),
+                size_kb=share_stats.get("bytes_read", 0) // 1024,
+                memory_block=memory_block,
+                incomplete="")
+
+            if api_semaphore is not None:
+                echo(f"[share] {host}/{share_name}: dump done "
+                     f"({share_stats['files_dumped']} files) — waiting for API slot...")
+                api_semaphore.acquire()
+                try:
+                    echo(f"[share] {host}/{share_name}: analyzing...")
+                    share_session = AgentSession(credential, policy, audit,
+                                                 hosts=[host], dc=dc,
+                                                 domain_source=domain_source)
+                    share_loop = AgentLoop(client_factory(), share_session,
+                                           policy, audit, echo=echo)
+                    share_report = share_loop.run(goal + "\n\n" + share_dump)
+                finally:
+                    api_semaphore.release()
+            else:
+                share_session = AgentSession(credential, policy, audit,
+                                             hosts=[host], dc=dc,
+                                             domain_source=domain_source)
+                share_loop = AgentLoop(client_factory(), share_session,
+                                       policy, audit, echo=echo)
+                share_report = share_loop.run(goal + "\n\n" + share_dump)
+
+            all_reports.append(f"### {share_name}\n{share_report}")
+
+            # Extract findings from THIS share's conversation
             try:
-                echo(f"[domain] {host}: API slot acquired — analyzing...")
-                loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
-                report_md = loop.run(goal)
-            finally:
-                api_semaphore.release()
-                echo(f"[domain] {host}: API slot released")
-        else:
-            loop = AgentLoop(client_factory(), session, policy, audit, echo=echo)
-            report_md = loop.run(goal)
-        entry["report_md"] = report_md
-        try:
-            entry["findings"] = extract_findings(client_factory(), policy, loop.messages)
-        except Exception as exc:  # noqa: BLE001 - merge what we have
-            entry["findings_error"] = f"{type(exc).__name__}: {exc}"
+                share_findings = extract_findings(
+                    client_factory(), policy, share_loop.messages)
+                for f in share_findings:
+                    f["share"] = share_name
+                all_findings.extend(share_findings)
+                echo(f"[share] {host}/{share_name}: {len(share_findings)} finding(s)")
+            except Exception as exc:  # noqa: BLE001
+                echo(f"[share] {host}/{share_name}: extraction failed — {exc}")
 
-        entry["tool_calls"] = session.budget.tool_calls
-        entry["bytes_read"] = session.budget.bytes_read
+            # Phase 3: generate rolling summary for the next share
+            memory = _generate_share_summary(
+                client_factory(), policy, share_name, share_report, echo)
+
+            entry["tool_calls"] = session.budget.tool_calls
+
+        # Combine all share findings + reports into host-level output
+        entry["dump_stats"] = total_dump_stats
+        entry["findings"] = all_findings
+        entry["report_md"] = "\n\n".join(all_reports)
 
         red = session.credential.redacted()
         html_path = audit.path[:-len(".jsonl")] + ".report.html"
@@ -221,16 +358,19 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                               "auth_type": red["auth_type"], "scope": [host],
                               "model": policy.model,
                               "endpoint": policy.api_base_url or "api.anthropic.com"},
-                     findings=entry["findings"], scan_results=session.scan_results,
-                     flagged=session.flagged_files, report_md=report_md,
+                     findings=all_findings, scan_results=session.scan_results,
+                     flagged=session.flagged_files,
+                     report_md=entry["report_md"],
                      audit_path=audit.path,
                      domain_computers=[c.to_dict() for c in computers],
                      share_inventories=session.share_inventories,
-                     transcript=loop.transcript,
+                     transcript=[],
                      debug_results=session.debug_results if policy.debug else [],
-                     dump_stats=entry.get("dump_stats"))
+                     dump_stats=total_dump_stats)
         entry["html"] = os.path.basename(html_path)
         entry["status"] = "done"
+        echo(f"[domain] {host}: done — {len(all_findings)} finding(s) across "
+             f"{len(dumpable)} share(s), report {entry['html']}")
         echo(f"[domain] {host}: done — {len(entry['findings'])} finding(s), "
              f"{entry['tool_calls']} calls, report "
              f"{os.path.join(run_dir, entry['html'])}")
