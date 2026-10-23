@@ -141,7 +141,19 @@ def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str
     return "\n".join(chunks), notes, dump_stats
 
 
-DEFAULT_SKIP_EXTENSIONS = {".rar", ".7z", ".zip", ".exe", ".msi", ".dll"}
+DEFAULT_SKIP_EXTENSIONS = {
+    ".rar", ".7z", ".zip", ".exe", ".msi", ".dll",
+    ".iso", ".vhd", ".vhdx", ".vmdk", ".img", ".wim",
+    ".mp3", ".mp4", ".avi", ".mkv", ".wav",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg",
+    ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",
+    ".pst", ".ost",
+    ".ttf", ".otf", ".woff", ".fon",
+    ".cab", ".msu", ".appx",
+    ".jar", ".war",
+    ".db", ".sqlite", ".mdf", ".ndf",
+    ".psd", ".ai",
+}
 
 
 def _walk_share_files(smb_session, share_name: str, depth: int,

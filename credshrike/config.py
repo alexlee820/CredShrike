@@ -52,7 +52,19 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "dump_page_chars": 24000,           # page target (tool char_cap is 40000)
     "dump_max_files": 500,
     # extensions to SKIP during dump (still listed in the report as "seen but not read")
-    "dump_skip_exts": [".rar", ".7z", ".zip", ".exe", ".msi", ".dll"],
+    "dump_skip_exts": [
+        ".rar", ".7z", ".zip", ".exe", ".msi", ".dll",           # archives + binaries
+        ".iso", ".vhd", ".vhdx", ".vmdk", ".img", ".wim",       # disk/vm images
+        ".mp3", ".mp4", ".avi", ".mkv", ".wav",                  # media
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg", # images
+        ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",       # office (binary zip)
+        ".pst", ".ost",                                           # outlook (huge)
+        ".ttf", ".otf", ".woff", ".fon",                          # fonts
+        ".cab", ".msu", ".appx",                                  # windows packages
+        ".jar", ".war",                                           # java archives
+        ".db", ".sqlite", ".mdf", ".ndf",                        # databases
+        ".psd", ".ai",                                            # design files
+    ],
     # --- debug mode: echo + record FULL tool results (what the model saw) --
     "debug": False,
     # --- context-window management ------------------------------------------
