@@ -51,6 +51,8 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "dump_per_file_bytes": 16384,       # head sent per file
     "dump_page_chars": 24000,           # page target (tool char_cap is 40000)
     "dump_max_files": 500,
+    # extensions to SKIP during dump (still listed in the report as "seen but not read")
+    "dump_skip_exts": [".rar", ".7z", ".zip", ".exe", ".msi", ".dll"],
     # --- debug mode: echo + record FULL tool results (what the model saw) --
     "debug": False,
     # --- context-window management ------------------------------------------
@@ -95,6 +97,7 @@ class Policy:
     dump_per_file_bytes: int = DEFAULT_POLICY_DICT["dump_per_file_bytes"]
     dump_page_chars: int = DEFAULT_POLICY_DICT["dump_page_chars"]
     dump_max_files: int = DEFAULT_POLICY_DICT["dump_max_files"]
+    dump_skip_exts: list[str] = field(default_factory=lambda: list(DEFAULT_POLICY_DICT["dump_skip_exts"]))
     debug: bool = DEFAULT_POLICY_DICT["debug"]
     context_token_limit: int = DEFAULT_POLICY_DICT["context_token_limit"]
     compact_at_ratio: float = DEFAULT_POLICY_DICT["compact_at_ratio"]

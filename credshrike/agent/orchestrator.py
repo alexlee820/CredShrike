@@ -141,11 +141,18 @@ def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str
     return "\n".join(chunks), notes, dump_stats
 
 
+DEFAULT_SKIP_EXTENSIONS = {".rar", ".7z", ".zip", ".exe", ".msi", ".dll"}
+
+
 def _walk_share_files(smb_session, share_name: str, depth: int,
-                       max_files: int, echo) -> list[dict]:
+                       max_files: int, echo,
+                       skip_exts: Optional[set] = None) -> tuple[list[dict], int, list[dict]]:
     """Phase 1 (sequential, fast): walk directory tree, return file metadata
-    list [{path, size, is_dir}] without reading any file content."""
+    list [{path, size}] without reading any file content. Files with skipped
+    extensions are tracked separately in `skipped` for the report."""
+    skip = skip_exts if skip_exts is not None else DEFAULT_SKIP_EXTENSIONS
     files: list[dict] = []
+    skipped: list[dict] = []
     queue: list[tuple[str, int]] = [("", 0)]
     seen_dirs: set[str] = set()
     dirs_walked = 0
@@ -171,12 +178,18 @@ def _walk_share_files(smb_session, share_name: str, depth: int,
                 if level < depth:
                     queue.append((child, level + 1))
             else:
-                files.append({"path": child, "size": entry.get("size", 0)})
-                if len(files) >= max_files:
-                    queue.clear()
-                    break
-    echo(f"  ⋮ walk done: {dirs_walked} dirs, {len(files)} files found")
-    return files, dirs_walked
+                ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+                if ext in skip:
+                    skipped.append({"path": child, "size": entry.get("size", 0),
+                                    "ext": ext})
+                else:
+                    files.append({"path": child, "size": entry.get("size", 0)})
+                    if len(files) >= max_files:
+                        queue.clear()
+                        break
+    echo(f"  ⋮ walk done: {dirs_walked} dirs, {len(files)} to read, "
+         f"{len(skipped)} skipped (ext)")
+    return files, dirs_walked, skipped
 
 
 def _dump_single_share(session, host: str, share_name: str,
@@ -192,11 +205,15 @@ def _dump_single_share(session, host: str, share_name: str,
 
     # Phase 1: walk (sequential — just directory listings, no file content)
     echo(f"[share] {host}/{share_name}: walking directory tree...")
-    file_list, dirs_walked = _walk_share_files(session.smb(host), share_name,
-                                                policy.dump_depth, policy.dump_max_files, echo)
+    file_list, dirs_walked, skipped_files = _walk_share_files(
+        session.smb(host), share_name,
+        policy.dump_depth, policy.dump_max_files, echo,
+        skip_exts=set(policy.dump_skip_exts))
     if not file_list:
-        return f"=== SHARE {share_name} (0 files) ===", \
-               {"dirs_walked": 0, "files_dumped": 0, "bytes_read": 0}, []
+        stats = {"dirs_walked": dirs_walked, "files_seen": 0, "files_dumped": 0,
+                 "bytes_read": 0, "errors": 0, "files_skipped_ext": len(skipped_files)}
+        return f"=== SHARE {share_name} (0 files, {len(skipped_files)} skipped) ===", \
+               stats, [], skipped_files
 
     bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
     per_file = policy.dump_per_file_bytes
@@ -270,10 +287,11 @@ def _dump_single_share(session, host: str, share_name: str,
         notes += "\nNOTE: byte budget exhausted — some files may be truncated.\n"
 
     stats = {"dirs_walked": dirs_walked, "files_seen": len(file_list),
-             "files_dumped": len(results), "bytes_read": total_bytes, "errors": errors}
+             "files_dumped": len(results), "bytes_read": total_bytes, "errors": errors,
+             "files_skipped_ext": len(skipped_files)}
     echo(f"[share] {host}/{share_name}: dump done — {len(results)} files, "
          f"{total_bytes // 1024}K read, {errors} error(s)")
-    return "\n".join(chunks) + notes, stats, file_paths
+    return "\n".join(chunks) + notes, stats, file_paths, skipped_files
 
 
 def _parse_checklist_paths(report_md: str) -> set[str]:
@@ -431,6 +449,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
         all_findings: list[dict] = []
         all_reports: list[str] = []
+        all_skipped: list[dict] = []    # files seen but not read (ext filter)
         memory = ""    # rolling summary from previous shares
         total_dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
                             "bytes_read": 0, "errors": 0}
@@ -440,7 +459,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
             # Phase 1: dump THIS share — parallel file reads (SMB I/O)
             echo(f"[share] ({si}/{len(dumpable)}) {host}/{share_name}: dumping...")
-            share_dump, share_stats, dumped_paths = _dump_single_share(
+            share_dump, share_stats, dumped_paths, skipped_ext = _dump_single_share(
                 session, host, share_name, policy, echo,
                 read_threads=read_threads)
             for key in total_dump_stats:
@@ -490,6 +509,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                          f"all {len(dumped_paths)} file(s) accounted for ✓")
 
             all_reports.append(f"### {share_name}\n{share_report}")
+            all_skipped.extend(skipped_ext)
 
             # Extract findings from THIS share's conversation
             try:
@@ -512,6 +532,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         entry["dump_stats"] = total_dump_stats
         entry["findings"] = all_findings
         entry["report_md"] = "\n\n".join(all_reports)
+        entry["skipped_files"] = all_skipped
 
         red = session.credential.redacted()
         html_path = audit.path[:-len(".jsonl")] + ".report.html"
@@ -528,7 +549,8 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                      share_inventories=session.share_inventories,
                      transcript=[],
                      debug_results=session.debug_results if policy.debug else [],
-                     dump_stats=total_dump_stats)
+                     dump_stats=total_dump_stats,
+                     skipped_files=all_skipped)
         entry["html"] = os.path.basename(html_path)
         entry["status"] = "done"
         echo(f"[domain] {host}: done — {len(all_findings)} finding(s) across "

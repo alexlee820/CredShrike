@@ -42,6 +42,14 @@ def _load_policy(args) -> Policy:
         logging.getLogger("CredShrike").setLevel(logging.DEBUG)
     if getattr(args, "context_limit", None):
         policy.context_token_limit = int(args.context_limit)
+    if getattr(args, "skip_exts", None) is not None:
+        raw = args.skip_exts.strip().lower()
+        if raw == "none" or raw == "":
+            policy.dump_skip_exts = []
+        else:
+            policy.dump_skip_exts = [e.strip().lower() if e.strip().startswith(".")
+                                      else "." + e.strip().lower()
+                                      for e in raw.split(",") if e.strip()]
     return policy
 
 
@@ -257,6 +265,12 @@ def register(subparsers) -> None:
                    help="full-domain: number of hosts swept in parallel "
                         "(default 1 = sequential; try 3-4 for faster sweeps, "
                         "mind SMB + API rate limits)")
+    p.add_argument("--skip-exts", default=None,
+                   help="comma-separated extensions to SKIP during dump "
+                        "(still listed in the report as 'seen but not read'). "
+                        "Default: .rar,.7z,.zip,.exe,.msi,.dll — pass "
+                        "'none' to read everything. Example: "
+                        "--skip-exts '.rar,.iso,vhdx,.vmdk'")
     p.add_argument("--api-base-url", default=None,
                    help="Anthropic-compatible endpoint override, e.g. "
                         "https://api.deepseek.com/anthropic or the GLM /api/anthropic URL "

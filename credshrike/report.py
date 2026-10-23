@@ -104,7 +104,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                       share_inventories: Optional[dict] = None,
                       transcript: Optional[list] = None,
                       debug_results: Optional[list] = None,
-                      dump_stats: Optional[dict] = None) -> str:
+                      dump_stats: Optional[dict] = None,
+                      skipped_files: Optional[list] = None) -> str:
     audit = _read_audit(audit_path)
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
@@ -358,7 +359,15 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
    f"dirs walked <b>{dump_stats.get('dirs_walked', 0)}</b> · "
    f"<b>{dump_stats.get('bytes_read', 0) // 1024} KiB</b> embedded in the analysis goal"
    f"{' · errors: ' + str(dump_stats.get('errors', 0)) if dump_stats.get('errors') else ''}"
+   f"{' · skipped (ext): ' + str(dump_stats.get('files_skipped_ext', 0)) if dump_stats.get('files_skipped_ext') else ''}"
    "</p>" if dump_stats else ""}
+  {"<h2>Seen but not read — skipped extensions (" + str(len(skipped_files)) + ")</h2>"
+   "<table><tr><th>path</th><th>size</th><th>ext</th></tr>" +
+   "".join(f"<tr><td class='path'>{_esc(s.get('path',''))}</td>"
+           f"<td>{s.get('size',0)}B</td>"
+           f"<td class='dim'>{_esc(s.get('ext',''))}</td></tr>"
+           for s in (skipped_files or [])) + "</table>"
+   if skipped_files else ""}
   <h2>Files read ({len(reads)})</h2>
   <table><tr><th>file read</th><th>range</th><th>verdict</th><th>duration</th></tr>{read_rows}</table>
   <h2>Flagged files (not read, {len(flagged)})</h2>

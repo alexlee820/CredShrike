@@ -277,6 +277,13 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.thinking_mode = "off"
     if params.get("debug"):
         policy.debug = True
+    if params.get("skip_exts") is not None:
+        raw = str(params["skip_exts"]).strip().lower()
+        if raw == "none" or raw == "":
+            policy.dump_skip_exts = []
+        else:
+            policy.dump_skip_exts = [e.strip() + ("" if e.strip().startswith(".") else ".")
+                                      for e in raw.split(",") if e.strip()]
     if params.get("context_limit"):
         policy.context_token_limit = int(params["context_limit"])
 
