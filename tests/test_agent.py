@@ -573,3 +573,38 @@ def test_goal_survives_compaction(session):
                 and len(b.get("content", "")) > 200]
     assert leftover == []          # everything compacted...
     assert loop.messages[0]["content"] == "FIND THE GOLDEN PASSWORD"   # ...except the goal
+
+
+def test_output_truncation_auto_continues(session):
+    """AI hits max_tokens mid-report → loop asks it to continue → parts joined."""
+    responses = iter([
+        # turn 1: truncated (max_tokens), partial text
+        SimpleNamespace(stop_reason="max_tokens",
+                        usage=SimpleNamespace(input_tokens=100, output_tokens=5),
+                        content=[_text("PART 1: FILE CHECKLIST\nFILE: a.txt | CLEAN")]),
+        # turn 2: truncated again, more partial text
+        SimpleNamespace(stop_reason="max_tokens",
+                        usage=SimpleNamespace(input_tokens=200, output_tokens=5),
+                        content=[_text("\nFILE: b.txt | FOUND | credential | user=admin")]),
+        # turn 3: finally complete
+        SimpleNamespace(stop_reason="end_turn",
+                        usage=SimpleNamespace(input_tokens=300, output_tokens=5),
+                        content=[_text("\nPART 3: SUMMARY\nDone.")]),
+    ])
+
+    class ContinuationMsgs:
+        def create(self, **kw):
+            return next(responses)
+
+    from credshrike.agent.loop import AgentLoop
+    loop = AgentLoop(SimpleNamespace(messages=ContinuationMsgs()),
+                     session, session.policy, session.audit, echo=lambda l: None)
+    result = loop.run("analyze")
+
+    assert "FILE: a.txt | CLEAN" in result
+    assert "FILE: b.txt | FOUND" in result
+    assert "PART 3: SUMMARY" in result
+    # the continuation prompt was sent
+    cont_msgs = [m for m in loop.messages if m["role"] == "user"
+                 and "cut off" in str(m.get("content", ""))]
+    assert len(cont_msgs) == 2    # two continuation rounds

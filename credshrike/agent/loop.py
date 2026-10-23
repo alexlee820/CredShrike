@@ -50,6 +50,9 @@ class AgentLoop:
         # context-window management
         self.context_tokens = 0       # input_tokens of the most recent call
         self._compactions = 0
+        # output truncation auto-continuation
+        self._output_parts: list[str] = []   # accumulated text from truncated turns
+        self._max_continuations = 3          # max "continue" rounds per goal
 
     # ------------------------------------------------------------------ #
     # context-window management
@@ -114,6 +117,7 @@ class AgentLoop:
         Conversation state persists across calls (REPL follow-ups)."""
         self.messages.append({"role": "user", "content": goal})
         self.transcript.append({"kind": "goal", "text": goal})
+        self._output_parts = []   # reset per goal
         while True:
             if self.stop_requested:
                 self.echo("[stopped] interrupted by user — returning partial state")
@@ -159,11 +163,33 @@ class AgentLoop:
 
             text = "".join(block.text for block in response.content
                            if getattr(block, "type", "") == "text")
+
+            # output truncation auto-continuation: the AI hit max_tokens
+            # mid-report — save what it wrote, ask it to continue
+            if response.stop_reason == "max_tokens" and text and \
+                    len(self._output_parts) < self._max_continuations:
+                self._output_parts.append(text)
+                self.echo(f"[output] truncated at max_tokens "
+                          f"(continuation {len(self._output_parts)}/{self._max_continuations}) "
+                          f"— asking AI to continue")
+                self.messages.append({"role": "user",
+                                      "content": "Your output was cut off. Continue EXACTLY "
+                                                 "where you stopped. Do not repeat what you "
+                                                 "already wrote."})
+                continue
+
             if not text and response.stop_reason not in ("end_turn", "stop_sequence"):
                 # (rare) non-terminal empty turn — nudge once, then give up
                 self.messages.append({"role": "user",
                                       "content": "Continue; if you are done, write the final report."})
                 continue
+
+            # combine accumulated truncated parts + final complete text
+            if self._output_parts:
+                full_text = "\n".join(self._output_parts) + "\n" + text
+                self.echo(f"[output] assembled from {len(self._output_parts) + 1} "
+                          f"continuation(s), {len(full_text)} chars total")
+                return full_text
             return text
 
     # ------------------------------------------------------------------ #
