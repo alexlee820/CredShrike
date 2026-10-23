@@ -207,20 +207,29 @@ def _dump_single_share(session, host: str, share_name: str,
     results: dict[str, dict] = {}   # path -> {content, size, truncated}
     total_bytes = 0
     errors = 0
+    debug = policy.debug
+    thread_stats: dict[str, list[str]] = {}  # thread_name -> [paths read]
 
     def _read_one(file_info):
         path = file_info["path"]
+        thread_name = threading.current_thread().name
+        if debug:
+            echo(f"  ⋮ [{thread_name}] reading {path}")
         try:
             read = session.smb(host).read_file(share_name, path, max_bytes=per_file)
             data = _b64.b64decode(read.get("content_b64", ""))
+            if debug:
+                echo(f"  ⋮ [{thread_name}] done {path} ({len(data)}B)")
             return path, {"content": data.decode("utf-8", errors="replace"),
                          "size": file_info["size"],
                          "head_truncated": len(data) >= per_file}
         except Exception as exc:  # noqa: BLE001
-            echo(f"  ! read_error: {path} — {str(exc)[:60]}")
+            echo(f"  ! [{thread_name}] read_error: {path} — {str(exc)[:60]}")
             return path, None
 
     with ThreadPoolExecutor(max_workers=read_threads) as pool:
+        # each file is submitted exactly once → no duplicates possible
+        # ThreadPoolExecutor's internal queue guarantees all tasks complete
         futures = {pool.submit(_read_one, f): f["path"] for f in file_list}
         for future in as_completed(futures):
             path, result = future.result()
@@ -229,6 +238,16 @@ def _dump_single_share(session, host: str, share_name: str,
                 total_bytes += len(result["content"].encode("utf-8", errors="replace"))
             else:
                 errors += 1
+
+    if debug:
+        # per-thread summary
+        for f in file_list:
+            if f["path"] in results:
+                # we can't easily map back to thread, but the per-file logs above
+                # already show which thread read what
+                pass
+        echo(f"  ⋮ [threads] {read_threads} threads read {len(results)}/{len(file_list)} "
+             f"files, {total_bytes // 1024}K total")
 
     session.budget.bytes_read += total_bytes
 
