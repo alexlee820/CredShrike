@@ -57,14 +57,14 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
         ".iso", ".vhd", ".vhdx", ".vmdk", ".img", ".wim",       # disk/vm images
         ".mp3", ".mp4", ".avi", ".mkv", ".wav",                  # media
         ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg", # images
-        ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",       # office (binary zip)
+        ".doc", ".xls", ".ppt",                                   # legacy OLE2 (binary)
         ".pst", ".ost",                                           # outlook (huge)
         ".ttf", ".otf", ".woff", ".fon",                          # fonts
         ".cab", ".msu", ".appx",                                  # windows packages
         ".jar", ".war",                                           # java archives
         ".db", ".sqlite", ".mdf", ".ndf",                        # databases
         ".psd", ".ai",                                            # design files
-    ],
+    ],  # NOTE: .docx/.xlsx/.pptx are NOT skipped — text is extracted from the OOXML zip
     # --- debug mode: echo + record FULL tool results (what the model saw) --
     "debug": False,
     # --- context-window management ------------------------------------------

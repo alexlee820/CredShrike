@@ -146,7 +146,7 @@ DEFAULT_SKIP_EXTENSIONS = {
     ".iso", ".vhd", ".vhdx", ".vmdk", ".img", ".wim",
     ".mp3", ".mp4", ".avi", ".mkv", ".wav",
     ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg",
-    ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",
+    ".doc", ".xls", ".ppt",              # legacy OLE2 (binary, no zip)
     ".pst", ".ost",
     ".ttf", ".otf", ".woff", ".fon",
     ".cab", ".msu", ".appx",
@@ -154,6 +154,41 @@ DEFAULT_SKIP_EXTENSIONS = {
     ".db", ".sqlite", ".mdf", ".ndf",
     ".psd", ".ai",
 }
+
+# Office formats we CAN extract text from (OOXML = ZIP containing XML)
+_OFFICE_EXTRACTABLE = {".docx", ".xlsx", ".pptx"}
+
+
+def _extract_office_text(raw_bytes: bytes, ext: str) -> str:
+    """Extract readable text from Office files (.docx/.xlsx/.pptx) by
+    unzipping the OOXML container and pulling text from the XML inside."""
+    import io
+    import re
+    import zipfile
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw_bytes))
+    except Exception:  # noqa: BLE001 — not a valid zip
+        return ""
+
+    parts: list[str] = []
+    if ext == ".docx":
+        for name in ("word/document.xml", "word/footnotes.xml"):
+            if name in zf.namelist():
+                xml = zf.read(name).decode("utf-8", errors="replace")
+                parts.extend(re.findall(r"<w:t[^>]*>([^<]+)</w:t>", xml))
+    elif ext == ".xlsx":
+        for name in zf.namelist():
+            if name == "xl/sharedStrings.xml" or name.startswith("xl/comments"):
+                xml = zf.read(name).decode("utf-8", errors="replace")
+                parts.extend(re.findall(r"<t[^>]*>([^<]+)</t>", xml))
+    elif ext == ".pptx":
+        for name in sorted(zf.namelist()):
+            if (name.startswith("ppt/slides/slide") or
+                    name.startswith("ppt/notesSlides/")) and name.endswith(".xml"):
+                xml = zf.read(name).decode("utf-8", errors="replace")
+                parts.extend(re.findall(r"<a:t>([^<]+)</a:t>", xml))
+    return "\n".join(parts)
 
 
 def _walk_share_files(smb_session, share_name: str, depth: int,
@@ -242,6 +277,7 @@ def _dump_single_share(session, host: str, share_name: str,
     def _read_one(file_info):
         path = file_info["path"]
         thread_name = threading.current_thread().name
+        ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
         if debug:
             echo(f"  ⋮ [{thread_name}] reading {path}")
         try:
@@ -249,6 +285,15 @@ def _dump_single_share(session, host: str, share_name: str,
             data = _b64.b64decode(read.get("content_b64", ""))
             if debug:
                 echo(f"  ⋮ [{thread_name}] done {path} ({len(data)}B)")
+
+            if ext in _OFFICE_EXTRACTABLE and data:
+                # Office OOXML: unzip + extract XML text instead of raw binary
+                text = _extract_office_text(data, ext)
+                if debug:
+                    echo(f"  ⋮ [{thread_name}] extracted {len(text)} chars from {ext} {path}")
+                return path, {"content": text if text else f"(empty {ext})",
+                             "size": file_info["size"],
+                             "head_truncated": len(data) >= per_file}
             return path, {"content": data.decode("utf-8", errors="replace"),
                          "size": file_info["size"],
                          "head_truncated": len(data) >= per_file}
