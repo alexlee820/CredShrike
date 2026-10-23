@@ -177,7 +177,64 @@ def _dump_single_share(session, host: str, share_name: str,
         notes = (f"\nNOTE: this share's dump was truncated "
                  f"({result.get('stop_reason')}). Use smb_dump_share with "
                  f"skip_files={result['stats']['files_dumped']} to see more.\n")
-    return "\n".join(chunks) + notes, result["stats"]
+    file_paths = [entry["path"] for entry in result["files"]]
+    return "\n".join(chunks) + notes, result["stats"], file_paths
+
+
+def _parse_checklist_paths(report_md: str) -> set[str]:
+    """Extract file paths from 'FILE: <path> | VERDICT: ...' checklist lines.
+    Robust to case/separator differences (AI might use \\ instead of /)."""
+    mentioned = set()
+    for line in report_md.split("\n"):
+        stripped = line.strip()
+        if stripped.upper().startswith("FILE:"):
+            # path is between "FILE:" and the first "|"
+            path_part = stripped[5:].split("|")[0].strip().strip("`\"'")
+            if path_part:
+                mentioned.add(path_part.lower().replace("\\", "/").strip("/"))
+    return mentioned
+
+
+def _verify_file_checklist(report_md: str, dumped_paths: list[str]) -> list[str]:
+    """Return files from the dump that were NOT accounted for in the AI's
+    checklist. This catches both format non-compliance and skipped files."""
+    mentioned = _parse_checklist_paths(report_md)
+    missing = []
+    for path in dumped_paths:
+        normalized = path.lower().replace("\\", "/").strip("/")
+        if normalized not in mentioned:
+            missing.append(path)
+    return missing
+
+
+def _corrective_checklist_round(client, policy, share_name: str,
+                                 missing_files: list[str], share_report: str,
+                                 echo) -> str:
+    """Send a corrective round asking the AI to output checklist lines for
+    files it missed. Returns the additional report text."""
+    file_list = "\n".join(f"  {f}" for f in missing_files)
+    prompt = (
+        f"Your file checklist for share '{share_name}' was INCOMPLETE. "
+        f"You did not account for these {len(missing_files)} file(s):\n"
+        f"{file_list}\n\n"
+        f"For EACH file listed above, output its checklist line in the "
+        f"MANDATORY FORMAT:\n"
+        f"FILE: <path> | VERDICT: FOUND/CLEAN/SKIPPED | <detail>\n\n"
+        f"Do not repeat your previous analysis. Only output the missing "
+        f"checklist lines.")
+    try:
+        resp = client.messages.create(
+            model=policy.model,
+            max_tokens=min(policy.max_tokens, 4096),
+            messages=[{"role": "user", "content": prompt}])
+        text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+        if text:
+            echo(f"[checklist] corrective round: {len(missing_files)} missing "
+                 f"file(s) → AI provided {text.count('FILE:')} checklist line(s)")
+            return text
+    except Exception as exc:  # noqa: BLE001 - best effort
+        echo(f"[checklist] corrective round failed: {exc}")
+    return ""
 
 
 def _generate_share_summary(client, policy, share_name: str,
@@ -291,7 +348,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
             # Phase 1: dump THIS share only (code-side, parallel-safe)
             echo(f"[share] ({si}/{len(dumpable)}) {host}/{share_name}: dumping...")
-            share_dump, share_stats = _dump_single_share(
+            share_dump, share_stats, dumped_paths = _dump_single_share(
                 session, host, share_name, policy, echo)
             for key in total_dump_stats:
                 total_dump_stats[key] += share_stats.get(key, 0)
@@ -329,6 +386,28 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                 share_loop = AgentLoop(client_factory(), share_session,
                                        policy, audit, echo=echo)
                 share_report = share_loop.run(goal + "\n\n" + share_dump)
+
+            # Phase 2b: verify file checklist coverage (catch AI skipping files)
+            if dumped_paths:
+                missing = _verify_file_checklist(share_report, dumped_paths)
+                if missing:
+                    echo(f"[checklist] {host}/{share_name}: "
+                         f"{len(missing)}/{len(dumped_paths)} file(s) not accounted for "
+                         f"— sending corrective round")
+                    corrective = _corrective_checklist_round(
+                        client_factory(), policy, share_name, missing,
+                        share_report, echo)
+                    if corrective:
+                        share_report += "\n" + corrective
+                        # re-verify after correction
+                        still_missing = _verify_file_checklist(share_report, dumped_paths)
+                        if still_missing:
+                            echo(f"[checklist] {host}/{share_name}: "
+                                 f"{len(still_missing)} file(s) STILL missing after "
+                                 f"correction — proceeding with partial coverage")
+                else:
+                    echo(f"[checklist] {host}/{share_name}: "
+                         f"all {len(dumped_paths)} file(s) accounted for ✓")
 
             all_reports.append(f"### {share_name}\n{share_report}")
 

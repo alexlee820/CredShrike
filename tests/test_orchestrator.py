@@ -43,6 +43,13 @@ def _client_factory_for_hosts(hosts_findings: dict):
                     return SimpleNamespace(stop_reason="end_turn",
                                            content=[SimpleNamespace(type="text", text=payload)])
 
+                # Checklist corrective call
+                if "checklist" in text.lower() and "INCOMPLETE" in text:
+                    return SimpleNamespace(stop_reason="end_turn",
+                                           content=[SimpleNamespace(
+                                               type="text",
+                                               text="FILE: f0.txt | VERDICT: CLEAN\nFILE: f1.txt | VERDICT: CLEAN")])
+
                 # Summary call
                 if "Summarize" in text or "summary" in text.lower():
                     return SimpleNamespace(stop_reason="end_turn",
