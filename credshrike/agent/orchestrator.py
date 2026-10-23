@@ -141,44 +141,120 @@ def _render_dump_for_goal(session, host: str, policy: Policy, echo) -> tuple[str
     return "\n".join(chunks), notes, dump_stats
 
 
+def _walk_share_files(smb_session, share_name: str, depth: int,
+                       max_files: int, echo) -> list[dict]:
+    """Phase 1 (sequential, fast): walk directory tree, return file metadata
+    list [{path, size, is_dir}] without reading any file content."""
+    files: list[dict] = []
+    queue: list[tuple[str, int]] = [("", 0)]
+    seen_dirs: set[str] = set()
+    dirs_walked = 0
+
+    while queue:
+        current, level = queue.pop(0)
+        if current in seen_dirs:
+            continue
+        seen_dirs.add(current)
+        dirs_walked += 1
+        echo(f"  ⋮ walk {current or '/'}")
+        try:
+            listing = smb_session.list_dir(share_name, current, max_entries=1000)
+        except Exception as exc:  # noqa: BLE001
+            echo(f"  ! walk_error: {current} — {str(exc)[:80]}")
+            continue
+        for entry in listing.get("entries", []):
+            name = entry.get("name", "")
+            if name in (".", ".."):
+                continue
+            child = f"{current}/{name}" if current else name
+            if entry.get("is_dir"):
+                if level < depth:
+                    queue.append((child, level + 1))
+            else:
+                files.append({"path": child, "size": entry.get("size", 0)})
+                if len(files) >= max_files:
+                    queue.clear()
+                    break
+    echo(f"  ⋮ walk done: {dirs_walked} dirs, {len(files)} files found")
+    return files, dirs_walked
+
+
 def _dump_single_share(session, host: str, share_name: str,
-                        policy: Policy, echo) -> tuple[str, dict]:
-    """Dump ONE share's contents as text (for per-share context windows).
-    Returns (share_dump_text, stats)."""
-    from ..scanner import dump_share
+                        policy: Policy, echo,
+                        read_threads: int = 4) -> tuple[str, dict, list[str]]:
+    """Dump ONE share using PARALLEL file reads. Phase 1 walks the directory
+    tree (sequential, fast). Phase 2 reads all files concurrently via
+    ThreadPoolExecutor (SMB I/O parallelism). Results are assembled into the
+    dump text. Returns (dump_text, stats, file_paths)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import base64 as _b64
+    from ..scanner import dump_share  # fallback for tier info if needed
 
-    char_budget = int((policy.context_token_limit or 133000) * 3) \
-        if policy.context_token_limit else _DEFAULT_GOAL_CHAR_BUDGET
-    # per-share budget: a fraction of the total (host has multiple shares)
-    share_budget = char_budget // 2
+    # Phase 1: walk (sequential — just directory listings, no file content)
+    echo(f"[share] {host}/{share_name}: walking directory tree...")
+    file_list, dirs_walked = _walk_share_files(session.smb(host), share_name,
+                                                policy.dump_depth, policy.dump_max_files, echo)
+    if not file_list:
+        return f"=== SHARE {share_name} (0 files) ===", \
+               {"dirs_walked": 0, "files_dumped": 0, "bytes_read": 0}, []
+
     bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
+    per_file = policy.dump_per_file_bytes
 
-    result = dump_share(
-        session.smb(host), share_name, "",
-        depth=policy.dump_depth,
-        per_file_bytes=policy.dump_per_file_bytes,
-        page_chars=share_budget,
-        max_files=policy.dump_max_files,
-        max_total_bytes=max(0, bytes_left),
-        on_event=lambda kind, data: echo(f"  ⋮ {kind} {data.get('path', '')}"
-                                         if isinstance(data, dict) else ""),
-    )
-    session.budget.bytes_read += int(result["stats"]["bytes_read"])
+    # Phase 2: read all files in parallel (this is the I/O hot spot)
+    echo(f"[share] {host}/{share_name}: reading {len(file_list)} files "
+         f"({read_threads} threads)...")
+    results: dict[str, dict] = {}   # path -> {content, size, truncated}
+    total_bytes = 0
+    errors = 0
 
-    chunks = [f"=== SHARE {share_name} "
-              f"({result['stats']['files_dumped']} files) ==="]
-    for entry in result["files"]:
-        header = f"---- {entry['path']} ({entry['size']}B" \
-                 f"{' head_truncated' if entry['head_truncated'] else ''}) ----"
-        chunks.append(header + "\n" + entry["content"])
+    def _read_one(file_info):
+        path = file_info["path"]
+        try:
+            read = session.smb(host).read_file(share_name, path, max_bytes=per_file)
+            data = _b64.b64decode(read.get("content_b64", ""))
+            return path, {"content": data.decode("utf-8", errors="replace"),
+                         "size": file_info["size"],
+                         "head_truncated": len(data) >= per_file}
+        except Exception as exc:  # noqa: BLE001
+            echo(f"  ! read_error: {path} — {str(exc)[:60]}")
+            return path, None
+
+    with ThreadPoolExecutor(max_workers=read_threads) as pool:
+        futures = {pool.submit(_read_one, f): f["path"] for f in file_list}
+        for future in as_completed(futures):
+            path, result = future.result()
+            if result is not None:
+                results[path] = result
+                total_bytes += len(result["content"].encode("utf-8", errors="replace"))
+            else:
+                errors += 1
+
+    session.budget.bytes_read += total_bytes
+
+    # Phase 3: assemble dump text (in original walk order, not completion order)
+    chunks = [f"=== SHARE {share_name} ({len(results)} files) ==="]
+    file_paths = []
+    for f in file_list:
+        path = f["path"]
+        if path in results:
+            r = results[path]
+            header = (f"---- {path} ({r['size']}B"
+                      f"{' head_truncated' if r['head_truncated'] else ''}) ----")
+            chunks.append(header + "\n" + r["content"])
+            file_paths.append(path)
 
     notes = ""
-    if result.get("truncated"):
-        notes = (f"\nNOTE: this share's dump was truncated "
-                 f"({result.get('stop_reason')}). Use smb_dump_share with "
-                 f"skip_files={result['stats']['files_dumped']} to see more.\n")
-    file_paths = [entry["path"] for entry in result["files"]]
-    return "\n".join(chunks) + notes, result["stats"], file_paths
+    if len(results) < len(file_list):
+        notes = (f"\nNOTE: {len(file_list) - len(results)} file(s) failed to read.\n")
+    if total_bytes >= bytes_left:
+        notes += "\nNOTE: byte budget exhausted — some files may be truncated.\n"
+
+    stats = {"dirs_walked": dirs_walked, "files_seen": len(file_list),
+             "files_dumped": len(results), "bytes_read": total_bytes, "errors": errors}
+    echo(f"[share] {host}/{share_name}: dump done — {len(results)} files, "
+         f"{total_bytes // 1024}K read, {errors} error(s)")
+    return "\n".join(chunks) + notes, stats, file_paths
 
 
 def _parse_checklist_paths(report_md: str) -> set[str]:
@@ -312,12 +388,10 @@ def merge_findings(all_findings: list[dict]) -> dict:
 
 def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
                     policy: Policy, dc: str, domain_source: str, computers: list,
-                    client_factory, echo, api_semaphore: Optional[threading.Semaphore] = None) -> None:
-    """Sweep ONE host using PER-SHARE context windows: each share gets its
-    own fresh AgentLoop (small enough for 8K-32K models). After each share
-    is analyzed, the LLM generates a rolling summary that's injected into
-    the NEXT share's context (cross-share memory). No regex — the LLM reads
-    the actual file content and decides what's a credential."""
+                    client_factory, echo, read_threads: int = 1) -> None:
+    """Sweep ONE host using PER-SHARE context windows. File reads within each
+    share use ThreadPoolExecutor (SMB I/O parallelism). LLM analysis is
+    sequential (one share at a time — avoids rate-limit storms)."""
     from .audit import AuditLog
     from .findings import extract_findings
     from .loop import AgentLoop
@@ -329,7 +403,6 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
     session = AgentSession(credential, policy, audit, hosts=[host],
                            dc=dc, domain_source=domain_source)
     try:
-        # Get share list (code-side, fast)
         shares = session.smb(host).list_shares()
         session.share_inventories[host] = shares
         entry["shares"] = shares
@@ -346,16 +419,17 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         for si, share_info in enumerate(dumpable, 1):
             share_name = share_info["name"]
 
-            # Phase 1: dump THIS share only (code-side, parallel-safe)
+            # Phase 1: dump THIS share — parallel file reads (SMB I/O)
             echo(f"[share] ({si}/{len(dumpable)}) {host}/{share_name}: dumping...")
             share_dump, share_stats, dumped_paths = _dump_single_share(
-                session, host, share_name, policy, echo)
+                session, host, share_name, policy, echo,
+                read_threads=read_threads)
             for key in total_dump_stats:
                 total_dump_stats[key] += share_stats.get(key, 0)
             entry["bytes_read"] = session.budget.bytes_read
-            entry["dump_stats"] = dict(total_dump_stats)  # keep updated even on error
+            entry["dump_stats"] = dict(total_dump_stats)
 
-            # Phase 2: fresh context window for THIS share
+            # Phase 2: fresh context window for THIS share (sequential — one LLM call at a time)
             memory_block = (f"\nMEMORY from previous shares on {host}:\n{memory}\n\n"
                             if memory else "")
             goal = _SHARE_ANALYSIS_PROMPT.format(
@@ -365,27 +439,14 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                 memory_block=memory_block,
                 incomplete="")
 
-            if api_semaphore is not None:
-                echo(f"[share] {host}/{share_name}: dump done "
-                     f"({share_stats['files_dumped']} files) — waiting for API slot...")
-                api_semaphore.acquire()
-                try:
-                    echo(f"[share] {host}/{share_name}: analyzing...")
-                    share_session = AgentSession(credential, policy, audit,
-                                                 hosts=[host], dc=dc,
-                                                 domain_source=domain_source)
-                    share_loop = AgentLoop(client_factory(), share_session,
-                                           policy, audit, echo=echo)
-                    share_report = share_loop.run(goal + "\n\n" + share_dump)
-                finally:
-                    api_semaphore.release()
-            else:
-                share_session = AgentSession(credential, policy, audit,
-                                             hosts=[host], dc=dc,
-                                             domain_source=domain_source)
-                share_loop = AgentLoop(client_factory(), share_session,
-                                       policy, audit, echo=echo)
-                share_report = share_loop.run(goal + "\n\n" + share_dump)
+            echo(f"[share] {host}/{share_name}: dump done "
+                 f"({share_stats['files_dumped']} files) — analyzing...")
+            share_session = AgentSession(credential, policy, audit,
+                                         hosts=[host], dc=dc,
+                                         domain_source=domain_source)
+            share_loop = AgentLoop(client_factory(), share_session,
+                                   policy, audit, echo=echo)
+            share_report = share_loop.run(goal + "\n\n" + share_dump)
 
             # Phase 2b: verify file checklist coverage (catch AI skipping files)
             if dumped_paths:
@@ -465,9 +526,9 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
 def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                            domain_source, computers, client_factory, echo,
-                           api_semaphore=None):
-    """Sweep one host with transient-error retry (shared by sequential and
-    parallel paths). Fills entry fields on success; records errors."""
+                           read_threads=1):
+    """Sweep one host with transient-error retry. Fills entry fields on
+    success; records errors."""
     echo(f"[domain] {host}: START sweep")
     transient_markers = ("no answer", "connection reset", "broken pipe",
                          "unpack requires", "timed out", "timeout")
@@ -480,7 +541,7 @@ def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
         try:
             _sweep_one_host(entry, host, run_dir, credential, policy, dc,
                             domain_source, computers, client_factory, echo,
-                            api_semaphore=api_semaphore)
+                            read_threads=read_threads)
             return
         except Exception as exc:  # noqa: BLE001
             message = str(exc).lower()
@@ -499,13 +560,11 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                      client_factory: Optional[Callable] = None, echo=print,
                      source_override=None, reachable_check: Optional[Callable] = None,
                      concurrency: int = 1) -> dict:
-    """Sweep a domain. concurrency=1 (default) is sequential; concurrency>1
-    uses a ThreadPoolExecutor — each host still gets its own context window,
-    its own audit log, its own LLM client; only the host-level orchestration
-    runs in parallel."""
-    # resolve at CALL time so monkeypatching module attributes works (a
-    # default-arg binding would freeze the original function and make tests
-    # environment-dependent)
+    """Sweep a domain. Hosts are SEQUENTIAL (one at a time — LLM analysis is
+    the bottleneck, not host discovery). Within each share, files are read
+    in PARALLEL via ThreadPoolExecutor (SMB I/O parallelism). The
+    `concurrency` parameter controls file-read threads per share, not
+    parallel hosts."""
     if reachable_check is None:
         reachable_check = _port_open
     from .audit import AuditLog
@@ -517,7 +576,6 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     computers = _resolve_computers(credential, dc, domain_source,
                                    computers_filter, source_override)
     hosts = [c.dns_name or c.cn for c in computers]
-    # explicit transport announcement in the log
     transport = "adws (net.tcp 9389)" if domain_source == "adws" else \
                f"ldap (389) [{domain_source}]" if domain_source == "ldap" else \
                f"auto → ldap (389) [requested: {domain_source}]"
@@ -525,22 +583,10 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     if max_hosts:
         hosts = hosts[:max_hosts]
     echo(f"[domain] {len(computers)} computer(s) in scope — sweeping {len(hosts)}"
-         + (f" (concurrency={concurrency})" if concurrency > 1 else ""))
+         + (f" (read_threads={concurrency})" if concurrency > 1 else ""))
     if concurrency > 1:
-        echo(f"[domain] PARALLEL: hosts will interleave in the log below — "
-             f"SMB dumps run concurrently; LLM analysis queues on an API semaphore")
-
-    # API semaphore: limits concurrent LLM calls. GLM plans typically allow
-    # 1; the semaphore prevents 429 storms that make parallel look sequential
-    api_concurrency = 1  # safe default for GLM; increase for Anthropic
-    if policy.api_base_url and "anthropic.com" not in policy.api_base_url:
-        api_concurrency = 1  # third-party endpoints: assume strict limits
-    else:
-        api_concurrency = min(concurrency, 3)  # official API: allow some parallel
-    api_semaphore = threading.Semaphore(api_concurrency) if concurrency > 1 else None
-    if api_semaphore:
-        echo(f"[domain] API semaphore: {api_concurrency} concurrent LLM call(s) max "
-             f"(prevents rate-limit storms; SMB dumps still fully parallel)")
+        echo(f"[domain] PARALLEL FILE READS: {concurrency} threads per share — "
+             f"SMB I/O runs concurrently; hosts are sequential")
 
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     run_dir = os.path.join(audit_dir, f"domain_{stamp}")
@@ -549,52 +595,28 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     started = time.time()
     results: list[dict] = []
 
-    def _work(index_host):
-        index, host = index_host
+    for index, host in enumerate(hosts, 1):
         entry = {"host": host, "status": "pending", "error": "", "shares": [],
                  "findings": [], "report_md": "", "audit_path": "", "html": "",
                  "tool_calls": 0, "bytes_read": 0}
-        # pre-checks (budget gate + reachability)
-        total_bytes = sum(r["bytes_read"] for r in results if r.get("bytes_read"))
-        total_calls = sum(r["tool_calls"] for r in results if r.get("tool_calls"))
+        results.append(entry)
+        # budget gate
+        total_bytes = sum(r["bytes_read"] for r in results)
+        total_calls = sum(r["tool_calls"] for r in results)
         if total_calls >= policy.max_tool_calls or \
                 total_bytes >= policy.max_total_read_bytes or \
                 time.time() - started > policy.wall_clock_seconds:
             entry["status"] = "skipped-budget"
             echo(f"[domain] {host}: SKIPPED — global budget exhausted")
-            return entry
+            continue
         if not reachable_check(host):
             entry["status"] = "unreachable"
             echo(f"[domain] {host}: SMB 445 unreachable — skipped")
-            return entry
+            continue
         echo(f"[domain] ({index}/{len(hosts)}) {host}: sweeping")
         _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                                domain_source, computers, client_factory, echo,
-                               api_semaphore=api_semaphore)
-        return entry
-
-    if concurrency <= 1:
-        for pair in enumerate(hosts, 1):
-            results.append(_work(pair))
-    else:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {pool.submit(_work, pair): pair[1] for pair in enumerate(hosts, 1)}
-            future_to_host = {f: h for f, h in futures.items()}
-            for future in as_completed(futures):
-                try:
-                    results.append(future.result())
-                except Exception as exc:  # noqa: BLE001 - host-level crash
-                    host = future_to_host[future]
-                    results.append({"host": host, "status": "error",
-                                    "error": f"{type(exc).__name__}: {exc}",
-                                    "shares": [], "findings": [], "report_md": "",
-                                    "audit_path": "", "html": "",
-                                    "tool_calls": 0, "bytes_read": 0})
-                    echo(f"[domain] {host}: CRASH — {type(exc).__name__}: {exc}")
-        # restore host order (as_completed returns in completion order)
-        order = {h: i for i, h in enumerate(hosts)}
-        results.sort(key=lambda r: order.get(r["host"], len(hosts)))
+                               read_threads=concurrency)
 
     merged = merge_findings([f for r in results for f in r["findings"]])
     context = {"principal": credential.redacted()["principal"],

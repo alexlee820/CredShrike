@@ -192,37 +192,21 @@ def test_dump_stats_surface_in_report(tmp_path, fake_smb):
     assert f"files read <b>{entry['dump_stats']['files_dumped']}</b>" in report
 
 
-def test_parallel_sweep_preserves_order_and_completes(tmp_path, fake_smb):
-    """concurrency=2 sweeps hosts in parallel; results still come back in
-    host order regardless of completion order."""
-    import time as _time
-
-    def slow_factory_wrapper():
-        # make later hosts finish FIRST to test order restoration
-        call_count = slow_factory_wrapper.n = getattr(slow_factory_wrapper, "n", 0) + 1
-        n = call_count
-
-        class SlowMsgs:
-            def create(self, **kw):
-                # first host's client is slower (sleeps), so host 2 finishes first
-                if n == 1:
-                    _time.sleep(0.3)
-                return SimpleNamespace(stop_reason="end_turn",
-                                       content=[SimpleNamespace(type="text", text=f"ok{n}")])
-        return SimpleNamespace(messages=SlowMsgs())
-
+def test_parallel_file_reads_and_sequential_hosts(tmp_path, fake_smb):
+    """concurrency>1 = parallel file reads within a share; hosts remain
+    sequential. Verify the log mentions parallel reads and hosts complete in order."""
     lines = []
     result = run_domain_sweep(
         credential=_credential(), policy=Policy(), audit_dir=str(tmp_path),
-        client_factory=slow_factory_wrapper, echo=lines.append,
+        client_factory=_client_factory_for_hosts({"ws01.corp.local": []}),
+        echo=lines.append,
         source_override=_computers,
         reachable_check=lambda host: True,
-        concurrency=2)
+        concurrency=4)
     statuses = {h["host"]: h["status"] for h in result["hosts"]}
-    assert all(s == "done" for s in statuses.values())       # all 3 swept
+    assert all(s == "done" for s in statuses.values())
     order = [h["host"] for h in result["hosts"]]
     expected = ["ws01.corp.local", "ws02.corp.local", "ws03.corp.local"]
-    assert order == expected                                  # host order preserved
-    assert "concurrency=2" in "".join(lines)                  # echo mentions it
-    # index generated with all hosts
+    assert order == expected    # sequential host order preserved
+    assert "read_threads=4" in "".join(lines)  # log mentions parallel reads
     assert os.path.exists(result["index_html"])
