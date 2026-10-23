@@ -277,20 +277,19 @@ def _dump_single_share(session, host: str, share_name: str,
     def _read_one(file_info):
         path = file_info["path"]
         thread_name = threading.current_thread().name
+        # short thread label: T0, T1, T2... instead of ThreadPoolExecutor-N_M
+        short_thread = thread_name.rsplit("_", 1)[-1] if "_" in thread_name else thread_name
         ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        if debug:
-            echo(f"  ⋮ [{thread_name}] reading {path}")
+        echo(f"  ⟐ [T{short_thread}] {path}")
         try:
             read = session.smb(host).read_file(share_name, path, max_bytes=per_file)
             data = _b64.b64decode(read.get("content_b64", ""))
-            if debug:
-                echo(f"  ⋮ [{thread_name}] done {path} ({len(data)}B)")
+            echo(f"  ✓ [T{short_thread}] {path} ({len(data)}B)")
 
             if ext in _OFFICE_EXTRACTABLE and data:
-                # Office OOXML: unzip + extract XML text instead of raw binary
                 text = _extract_office_text(data, ext)
-                if debug:
-                    echo(f"  ⋮ [{thread_name}] extracted {len(text)} chars from {ext} {path}")
+                if text:
+                    echo(f"  ✓ [T{short_thread}] extracted {len(text)} chars from {path}")
                 return path, {"content": text if text else f"(empty {ext})",
                              "size": file_info["size"],
                              "head_truncated": len(data) >= per_file}
@@ -298,7 +297,7 @@ def _dump_single_share(session, host: str, share_name: str,
                          "size": file_info["size"],
                          "head_truncated": len(data) >= per_file}
         except Exception as exc:  # noqa: BLE001
-            echo(f"  ! [{thread_name}] read_error: {path} — {str(exc)[:60]}")
+            echo(f"  ! [T{short_thread}] {path} FAILED — {str(exc)[:60]}")
             return path, None
 
     with ThreadPoolExecutor(max_workers=read_threads) as pool:

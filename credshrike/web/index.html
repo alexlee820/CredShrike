@@ -65,6 +65,9 @@
   #live .transport { color:#43d17c; font-weight:600; }
   #live .parallel { color:#b68cff; font-weight:600; }
   #live .waiting { color:#ffb84d; }
+  #live .thread-read { color:#4da3ff; font-size:11px; }
+  #live .thread-done { color:#43d17c; font-size:11px; }
+  #live .thread-err { color:#ff6b6b; font-size:11px; }
   #live div time { color:#4a5568; font-size:10px; margin-right:6px; }
 
   .bottom { display:grid; grid-template-columns:2fr 1fr; gap:12px; margin-top:12px;
@@ -293,9 +296,12 @@ function renderLive() {
               : text.includes('TRANSPORT') ? 'transport'
               : text.includes('PARALLEL') || text.includes('START sweep') ? 'parallel'
               : text.includes('⏳') || text.includes('rate limited') ? 'waiting'
+              : text.includes('⟐ [T') ? 'thread-read'
+              : text.includes('✓ [T') ? 'thread-done'
+              : text.includes('! [T') || text.includes('FAILED') ? 'thread-err'
               : text.includes('!') || text.includes('ERROR') ? 'err'
               : text.startsWith('  →') || text.startsWith('  ←') ? 'call'
-              : text.startsWith('  ⋮') ? 'walk' : '';
+              : text.startsWith('  ⋮') || text.includes('  ⋮') ? 'walk' : '';
     return `<div class="${cls}">${stamp}${text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`;
   }).join('');
   const older = allLines.length - shown.length;
