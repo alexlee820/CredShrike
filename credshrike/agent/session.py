@@ -10,6 +10,7 @@ by SMBSession / the directory sources.
 from __future__ import annotations
 
 import time
+from queue import Queue
 from typing import Optional
 
 from ..config import Policy
@@ -93,6 +94,9 @@ class AgentSession:
         # optional progress hook for UIs/echo: emit(kind, data) — set by the
         # web app so mid-sweep progress reaches the browser
         self.event_hook = None
+        # connection pool for parallel file reads (created lazily per host)
+        self._read_pools: dict[str, Queue] = {}
+        self.read_threads = int(getattr(policy, "read_threads", 4))
 
     def emit(self, kind: str, data: dict) -> None:
         if self.event_hook is not None:
@@ -125,6 +129,23 @@ class AgentSession:
             self._smb_cache[host] = session
         return self._smb_cache[host]
 
+    def get_read_pool(self, host: str) -> Queue:
+        """Get or create a connection pool for parallel file reads on a host.
+        Each pool has `read_threads` independent SMB connections."""
+        if host not in self._read_pools:
+            pool: Queue = Queue()
+            for _ in range(max(1, self.read_threads)):
+                try:
+                    reader = SMBSession(self.credential, host, timeout=30)
+                    reader.connect()
+                    pool.put(reader)
+                except Exception:  # noqa: BLE001 — mock env, fall back below
+                    pass
+            if pool.qsize() == 0:
+                pool.put(self.smb(host))  # fall back to shared connection
+            self._read_pools[host] = pool
+        return self._read_pools[host]
+
     def any_smb_resolver(self):
         """Resolver from any live SMB session (LSA-capable), or a plain
         well-known/static resolver when no session is open yet."""
@@ -152,6 +173,18 @@ class AgentSession:
 
     # -- lifecycle --------------------------------------------------------- #
     def close(self) -> None:
+        # close read pools (but not the shared cached sessions)
+        for pool in self._read_pools.values():
+            while True:
+                try:
+                    reader = pool.get_nowait()
+                except Exception:  # noqa: BLE001 — Queue.Empty
+                    break
+                try:
+                    reader.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        self._read_pools.clear()
         for session in self._smb_cache.values():
             try:
                 session.close()

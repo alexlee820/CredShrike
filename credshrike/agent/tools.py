@@ -99,50 +99,102 @@ def _sid_lookup(ctx: AgentSession, args: dict) -> Any:
 
 
 def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
-    """Snaffler-style deterministic sweep: tier triage + regex content scan.
-    The model's job afterwards is judgment: classify each hit as true/false
-    positive and assess impact (permissions probes etc.)."""
-    from ..patterns import compile_patterns
-    from ..scanner import scan_share
+    """Snaffler-style sweep with PARALLEL walk + PARALLEL reads.
+    Uses the session's connection pool for concurrent SMB I/O."""
+    from ..patterns import compile_patterns, classify_file
+    from .orchestrator import _walk_share_files, DEFAULT_SKIP_EXTENSIONS
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from .scanner import _find_matches, mask_line
 
-    session = ctx.smb(args["host"])
+    host = args["host"]
+    share = args["share"]
+    session = ctx.smb(host)
     patterns = compile_patterns(extra=ctx.policy.scan_extra_patterns,
                                 use_defaults=ctx.policy.scan_use_default_patterns)
-    result = scan_share(
-        session, args["share"], args.get("path", "") or "",
-        depth=int(args.get("depth", ctx.policy.scan_depth)),
-        max_files=int(args.get("max_files", ctx.policy.scan_max_files)),
-        max_file_bytes=int(ctx.policy.scan_max_file_bytes),
-        max_total_bytes=ctx.policy.max_total_read_bytes,
-        tiers=tuple(args.get("tiers", ctx.policy.scan_tiers)),
-        patterns=patterns,
-        on_event=ctx.emit,
-        skip_matches=int(args.get("skip_matches", 0)),
-    )
-    # deterministic byte accounting toward the run budget
-    ctx.budget.bytes_read += int(result["stats"]["bytes_scanned"])
-    ctx.scan_results.append(result)   # harness-side copy for the HTML report
+    skip_exts = set(ctx.policy.dump_skip_exts)
+
+    # Phase 1: parallel walk (same infra as orchestrator)
+    pool = ctx.get_read_pool(host)
+    file_list, dirs_walked, skipped_ext = _walk_share_files(
+        session, share, int(args.get("depth", ctx.policy.scan_depth)),
+        int(args.get("max_files", ctx.policy.scan_max_files)),
+        ctx.emit, skip_exts=skip_exts,
+        conn_pool=pool, walk_threads=ctx.read_threads)
+
+    # Phase 2: filter by tier (red/yellow) then parallel-read + regex
+    tiers = tuple(args.get("tiers", ctx.policy.scan_tiers))
+    candidates = []
+    stats = {"dirs_walked": dirs_walked, "files_seen": len(file_list),
+             "files_scanned": 0, "files_skipped_notier": 0,
+             "bytes_scanned": 0, "scan_errors": 0, "files_skipped_ext": len(skipped_ext)}
+
+    for f in file_list:
+        tier = classify_file(f["path"].rsplit("/", 1)[-1], tiers)
+        if tier is None:
+            stats["files_skipped_notier"] += 1
+        else:
+            candidates.append({"path": f["path"], "size": f["size"], "tier": tier})
+
+    matches = []
+    per_file = int(ctx.policy.scan_max_file_bytes)
+
+    def _scan_one(f):
+        reader = pool.get(timeout=30)
+        try:
+            read = reader.read_file(share, f["path"], max_bytes=per_file)
+            import base64 as _b64
+            data = _b64.b64decode(read.get("content_b64", ""))
+            return f["path"], f["tier"], data, None
+        except Exception as exc:
+            return f["path"], f["tier"], None, str(exc)[:60]
+        finally:
+            pool.put(reader)
+
+    with ThreadPoolExecutor(max_workers=max(1, ctx.read_threads)) as executor:
+        futures = {executor.submit(_scan_one, f): f for f in candidates}
+        for future in as_completed(futures):
+            path, tier, data, err = future.result()
+            if err:
+                stats["scan_errors"] += 1
+                continue
+            stats["files_scanned"] += 1
+            stats["bytes_scanned"] += len(data)
+            ctx.budget.bytes_read += len(data)
+            text = data.decode("utf-8", errors="replace")
+            for line_no, line_text, pattern_name, g_start, g_end in _find_matches(text, patterns):
+                matches.append({"path": path, "tier": tier, "line": line_no,
+                                "pattern": pattern_name,
+                                "snippet": mask_line(line_text.strip(), g_start, g_end)[:300]})
+
+    # page the results
+    skip = int(args.get("skip_matches", 0))
+    page = matches[skip: skip + 50]
+    result = {
+        "share": share, "root": args.get("path", ""),
+        "matches": page, "matches_skip": skip, "matches_total": len(matches),
+        "next_skip": (skip + len(page)) if skip + len(page) < len(matches) else None,
+        "stats": stats,
+        "patterns_used": [p["name"] for p in patterns],
+    }
+    ctx.scan_results.append(result)
     return result
 
 
 def _smb_dump_share(ctx: AgentSession, args: dict) -> Any:
-    """Full-content dump for custom goals: EVERY file, every extension."""
-    from ..scanner import dump_share
+    """Full-content dump with parallel reads + skip extensions (same infra as orchestrator)."""
+    from .orchestrator import _dump_single_share
 
-    session = ctx.smb(args["host"])
-    remaining = max(0, ctx.policy.max_total_read_bytes - ctx.budget.bytes_read)
-    result = dump_share(
-        session, args["share"], args.get("path", "") or "",
-        depth=int(args.get("depth", ctx.policy.dump_depth)),
-        per_file_bytes=int(ctx.policy.dump_per_file_bytes),
-        page_chars=int(ctx.policy.dump_page_chars),
-        max_files=int(args.get("max_files", ctx.policy.dump_max_files)),
-        max_total_bytes=remaining,
-        skip_files=int(args.get("skip_files", 0)),
-        on_event=ctx.emit,
-    )
-    ctx.budget.bytes_read += int(result["stats"]["bytes_read"])
-    return result
+    host = args["host"]
+    ctx.share_inventories[host] = ctx.smb(host).list_shares()
+    dump_text, stats, file_paths, skipped = _dump_single_share(
+        ctx, host, args["share"], ctx.policy,
+        ctx.emit, read_threads=ctx.read_threads)
+    ctx.budget.bytes_read += int(stats.get("bytes_read", 0))
+
+    return {"share": args["share"], "files": file_paths,
+            "files_total": len(file_paths), "skipped_ext": len(skipped),
+            "stats": stats, "dump_text": dump_text[:8000],
+            "next_skip": None}
 
 
 # --------------------------------------------------------------------------- #

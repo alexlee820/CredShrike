@@ -42,6 +42,8 @@ def _load_policy(args) -> Policy:
         logging.getLogger("CredShrike").setLevel(logging.DEBUG)
     if getattr(args, "context_limit", None):
         policy.context_token_limit = int(args.context_limit)
+    if getattr(args, "concurrency", None):
+        policy.read_threads = int(args.concurrency)
     if getattr(args, "skip_exts", None) is not None:
         raw = args.skip_exts.strip().lower()
         if raw == "none" or raw == "":
@@ -147,23 +149,32 @@ def _resolve_preset(args) -> Optional[str]:
 
 
 def cmd_agent(args) -> None:
+    # build credential + policy once for ALL presets
+    credential = build_credential(args)
+    policy = _load_policy(args)
+    concurrency = args.concurrency or 1
+    preset = _resolve_preset(args)
+
+    # config banner for EVERY preset (full-domain, full, snaffler, custom)
+    from .orchestrator import _print_config_banner
+    _print_config_banner(credential, policy, args.dc or "", args.source,
+                        concurrency, lambda l: print(l))
+
     # full-domain: per-computer fan-out with orchestrator
-    if _resolve_preset(args) == "full-domain":
+    if preset == "full-domain":
         from .orchestrator import run_domain_sweep
-        credential = build_credential(args)
-        policy = _load_policy(args)
         run_domain_sweep(credential=credential, policy=policy,
                          audit_dir=args.audit_dir, dc=args.dc or "",
                          domain_source=args.source,
                          computers_filter=args.computers_filter or "",
                          max_hosts=args.max_hosts or None,
-                         concurrency=args.concurrency or 1)
+                         concurrency=concurrency)
         return
 
     # full (single host): code-side parallel dump + config banner, same as
     # full-domain but for just the specified host(s)
-    if _resolve_preset(args) == "full":
-        from .orchestrator import _print_config_banner, _dump_single_share, \
+    if preset == "full":
+        from .orchestrator import _dump_single_share, \
             _SHARE_ANALYSIS_PROMPT, _verify_file_checklist, _corrective_checklist_round
         from .session import AgentSession
         from .loop import AgentLoop
@@ -171,14 +182,7 @@ def cmd_agent(args) -> None:
         from ..report import write_report
         from pathlib import Path
 
-        credential = build_credential(args)
-        policy = _load_policy(args)
-        concurrency = args.concurrency or 1
-
-        # config banner
-        _print_config_banner(credential, policy, args.dc or "", args.source,
-                            concurrency, lambda l: print(l))
-
+        # config banner already printed at the top of cmd_agent
         hosts = [h.strip() for h in (args.host or "").split(",") if h.strip()]
         if not hosts:
             print("[error] --preset full requires --host <hostname>")

@@ -52,6 +52,7 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "dump_page_chars": 24000,           # page target (tool char_cap is 40000)
     "dump_max_files": 500,
     # extensions to SKIP during dump (still listed in the report as "seen but not read")
+    "read_threads": 4,                  # parallel SMB reads (all presets)
     "dump_skip_exts": [
         ".rar", ".7z", ".zip", ".exe", ".msi", ".dll",           # archives + binaries
         ".iso", ".vhd", ".vhdx", ".vmdk", ".img", ".wim",       # disk/vm images
@@ -109,6 +110,7 @@ class Policy:
     dump_per_file_bytes: int = DEFAULT_POLICY_DICT["dump_per_file_bytes"]
     dump_page_chars: int = DEFAULT_POLICY_DICT["dump_page_chars"]
     dump_max_files: int = DEFAULT_POLICY_DICT["dump_max_files"]
+    read_threads: int = DEFAULT_POLICY_DICT["read_threads"]
     dump_skip_exts: list[str] = field(default_factory=lambda: list(DEFAULT_POLICY_DICT["dump_skip_exts"]))
     debug: bool = DEFAULT_POLICY_DICT["debug"]
     context_token_limit: int = DEFAULT_POLICY_DICT["context_token_limit"]

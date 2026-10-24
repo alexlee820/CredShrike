@@ -281,6 +281,8 @@ def _auth_from_params(params: dict) -> dict:
 def _apply_policy_overrides(policy: Policy, params: dict) -> None:
     if params.get("model"):
         policy.model = params["model"]
+    if params.get("concurrency"):
+        policy.read_threads = int(params["concurrency"])
     if params.get("read_gate"):
         policy.read_gate = params["read_gate"]
     if params.get("max_read_tokens"):
