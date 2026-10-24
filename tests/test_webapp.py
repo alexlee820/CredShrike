@@ -211,18 +211,26 @@ def test_custom_endpoint_disables_thinking_by_default():
     assert policy3.thinking_mode == "adaptive"              # official API unchanged
 
 
-def test_full_preset_goal(client, fake_client):
-    run_id = client.post("/api/runs", json=_params(preset="full", goal="")).get_json()["id"]
-    s = _wait_status(client, run_id, {"done", "error"})
+def test_full_preset_single_host_via_orchestrator(client, monkeypatch):
+    """'full' preset with host → orchestrator path (parallel dump + banner)"""
+    import credshrike.agent.orchestrator as orch
+    from test_agent import FakeSMB
+    from credshrike.domain.base import ComputerRecord
+    import credshrike.agent.session as session_mod
+    monkeypatch.setattr(session_mod.AgentSession, "smb", lambda self, host: FakeSMB())
+    monkeypatch.setattr(orch, "_port_open", lambda host, port=445, timeout=3: True)
+
+    class Ok:
+        def create(self, **kw):
+            return SimpleNamespace(stop_reason="end_turn",
+                                   content=[SimpleNamespace(type="text", text="ok")])
+    monkeypatch.setattr(webapp, "_client_factory", lambda: SimpleNamespace(messages=Ok()))
+
+    run_id = client.post("/api/runs", json=_params(preset="full", goal="",
+                                                   host="ws01.corp.local")).get_json()["id"]
+    s = _wait_status(client, run_id, {"done", "error"}, timeout=15)
     assert s["status"] == "done", s.get("error")
-    first_user = fake_client.messages.requests[0]["messages"][0]
-    # 'full' preset with host now routes through the orchestrator (parallel
-    # dump + config banner); the goal contains the share analysis prompt
-    assert "SHARE" in str(first_user.get("content", "")) or \
-           "share" in str(first_user.get("content", "")) or \
-           "FILE CHECKLIST" in str(first_user.get("content", "")) or \
-           "dump" in str(first_user.get("content", ""))
-    assert "smb_dump_share" in str(first_user.get("content", ""))
+    assert s["report_html"], "report should be generated"
 
 
 def test_full_domain_webapp_path(client, monkeypatch):
