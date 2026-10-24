@@ -265,24 +265,45 @@ def _dump_single_share(session, host: str, share_name: str,
     bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
     per_file = policy.dump_per_file_bytes
 
-    # Phase 2: read all files in parallel (this is the I/O hot spot)
+    # Phase 2: read all files in parallel using a CONNECTION POOL
+    # (impacket's SMBConnection is NOT thread-safe — each thread needs
+    #  its own TCP connection to avoid protocol message interleaving)
     echo(f"[share] {host}/{share_name}: reading {len(file_list)} files "
          f"({read_threads} threads)...")
-    results: dict[str, dict] = {}   # path -> {content, size, truncated}
+    results: dict[str, dict] = {}
     total_bytes = 0
     errors = 0
-    debug = policy.debug
-    thread_stats: dict[str, list[str]] = {}  # thread_name -> [paths read]
+
+    from .session import AgentSession
+    from queue import Queue
+
+    # create one SMB connection per thread (SMBConnection is NOT thread-safe)
+    # fall back to the original session if pool creation fails (tests/mocks)
+    smb_pool: Queue = Queue()
+    from ..smb_session import SMBSession
+    for i in range(max(1, read_threads)):
+        try:
+            reader = SMBSession(session.credential, host, timeout=30)
+            reader.connect()
+            smb_pool.put(reader)
+        except Exception:  # noqa: BLE001 — pool creation failed (mock/no network)
+            pass
+    if smb_pool.qsize() == 0:
+        # fall back: use the original session's connection (works with mocks)
+        smb_pool.put(session)
+        echo(f"  ⋮ using shared connection (pool creation unavailable)")
+    else:
+        echo(f"  ⋮ {smb_pool.qsize()} SMB connection(s) in reader pool")
 
     def _read_one(file_info):
         path = file_info["path"]
         thread_name = threading.current_thread().name
-        # short thread label: T0, T1, T2... instead of ThreadPoolExecutor-N_M
         short_thread = thread_name.rsplit("_", 1)[-1] if "_" in thread_name else thread_name
         ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        echo(f"  ⟐ [T{short_thread}] {path}")
+        reader = smb_pool.get()   # borrow a connection
         try:
-            read = session.smb(host).read_file(share_name, path, max_bytes=per_file)
+            echo(f"  ⟐ [T{short_thread}] {path}")
+            read = reader.smb(host).read_file(share_name, path, max_bytes=per_file)
             data = _b64.b64decode(read.get("content_b64", ""))
             echo(f"  ✓ [T{short_thread}] {path} ({len(data)}B)")
 
@@ -299,6 +320,8 @@ def _dump_single_share(session, host: str, share_name: str,
         except Exception as exc:  # noqa: BLE001
             echo(f"  ! [T{short_thread}] {path} FAILED — {str(exc)[:60]}")
             return path, None
+        finally:
+            smb_pool.put(reader)   # return the connection
 
     with ThreadPoolExecutor(max_workers=read_threads) as pool:
         # each file is submitted exactly once → no duplicates possible
@@ -312,15 +335,17 @@ def _dump_single_share(session, host: str, share_name: str,
             else:
                 errors += 1
 
-    if debug:
-        # per-thread summary
-        for f in file_list:
-            if f["path"] in results:
-                # we can't easily map back to thread, but the per-file logs above
-                # already show which thread read what
+    # close only the pool-created connections (not the original session)
+    while not smb_pool.empty():
+        reader = smb_pool.get_nowait()
+        if reader is not session:  # don't close the original session
+            try:
+                reader.close()
+            except Exception:  # noqa: BLE001
                 pass
-        echo(f"  ⋮ [threads] {read_threads} threads read {len(results)}/{len(file_list)} "
-             f"files, {total_bytes // 1024}K total")
+
+    echo(f"  ⋮ pool closed. {read_threads} thread(s) read "
+         f"{len(results)}/{len(file_list)} files, {total_bytes // 1024}K, {errors} error(s)")
 
     session.budget.bytes_read += total_bytes
 
