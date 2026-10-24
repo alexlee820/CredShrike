@@ -701,6 +701,58 @@ def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
             return
 
 
+def _print_config_banner(credential: Credential, policy: Policy, dc: str,
+                         domain_source: str, concurrency: int, echo) -> None:
+    """Print a settings banner + equivalent CLI command at the start of a run."""
+    red = credential.redacted()
+    sep = "═" * 60
+
+    # equivalent CLI command (password masked)
+    auth_flag = {"password": f"--password ***",
+                 "ntlm": f"--hashes ***:{'*' * 32}",
+                 "aes": "--aes-key ***",
+                 "ticket": f"--ticket {credential.ticket_path or '***'}"}.get(
+        credential.auth_type.value, "")
+
+    cmd_parts = [
+        "credshrike agent",
+        f"--dc {dc}" if dc else "",
+        f"--user {credential.username}",
+        f"--domain {credential.domain}",
+        auth_flag,
+        f"--kdc {credential.kdc_host}" if credential.kdc_host else "",
+        f"--model {policy.model}",
+        f"--api-base-url {policy.api_base_url}" if policy.api_base_url else "",
+        f"--concurrency {concurrency}" if concurrency > 1 else "",
+        f"--context-limit {policy.context_token_limit}" if policy.context_token_limit else "",
+        f"--read-gate {policy.read_gate}" if policy.read_gate != "none" else "",
+        f"--redact '{','.join(policy.redact_literals)}'" if policy.redact_literals else "",
+        f"--skip-exts '{','.join(policy.dump_skip_exts[:6])}...'" if policy.dump_skip_exts else "",
+        "--debug" if policy.debug else "",
+    ]
+    cli_cmd = " \\\n  ".join(p for p in cmd_parts if p)
+
+    echo(sep)
+    echo(" CredShrike — Configuration")
+    echo(sep)
+    echo(f" Credential : {red['principal']} ({red['auth_type']})")
+    echo(f" DC         : {dc or '(not set)'}")
+    echo(f" Transport  : {'adws (net.tcp 9389)' if domain_source == 'adws' else 'ldap (389)' if domain_source == 'ldap' else 'auto → ldap'}")
+    echo(f" Model      : {policy.model} @ {policy.api_base_url or 'api.anthropic.com'}")
+    echo(f" Concurrency: {concurrency} thread(s) (parallel file reads)")
+    echo(f" Skip exts  : {len(policy.dump_skip_exts)} types" +
+         (f" ({', '.join(policy.dump_skip_exts[:5])}...)" if policy.dump_skip_exts else " (none)"))
+    echo(f" Read gate  : {policy.read_gate}")
+    echo(f" Context    : {policy.context_token_limit or 'off'}" +
+         (f" (compact at {int(policy.compact_at_ratio * 100)}%)" if policy.context_token_limit else ""))
+    echo(f" Budget     : {policy.max_tool_calls} calls / {policy.max_total_read_bytes // 1048576} MiB / {policy.wall_clock_seconds}s")
+    echo(f" Debug      : {'ON' if policy.debug else 'off'}")
+    echo(sep)
+    echo(" Equivalent CLI command:")
+    echo(f"  {cli_cmd}")
+    echo(sep)
+
+
 def run_domain_sweep(*, credential: Credential, policy: Policy,
                      audit_dir: str = "runs", dc: str = "", domain_source: str = "auto",
                      computers_filter: str = "", max_hosts: Optional[int] = None,
@@ -726,6 +778,7 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     transport = "adws (net.tcp 9389)" if domain_source == "adws" else \
                f"ldap (389) [{domain_source}]" if domain_source == "ldap" else \
                f"auto → ldap (389) [requested: {domain_source}]"
+    _print_config_banner(credential, policy, dc, domain_source, concurrency, echo)
     echo(f"[domain] TRANSPORT: {transport} — querying domain computers")
     if max_hosts:
         hosts = hosts[:max_hosts]
