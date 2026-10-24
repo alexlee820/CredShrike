@@ -279,10 +279,14 @@ def _close_pool(pool, original_session):
 
 def _dump_single_share(session, host: str, share_name: str,
                         policy: Policy, echo,
-                        read_threads: int = 4) -> tuple[str, dict, list[str]]:
+                        read_threads: int = 4) -> tuple[list[dict], dict, list[str]]:
     """Dump ONE share: Phase 1 walks directory tree (parallel BFS), Phase 2
     reads all files concurrently (ThreadPool). Both phases share a connection
-    pool (one SMB connection per thread — SMB is not thread-safe)."""
+    pool (one SMB connection per thread — SMB is not thread-safe).
+
+    Returns (file_entries, stats, skipped_files) where each entry carries its
+    own content — the CALLER decides how to render/split them across context
+    windows (see _analyze_share_batches)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import base64 as _b64
     from queue import Queue
@@ -315,8 +319,7 @@ def _dump_single_share(session, host: str, share_name: str,
         stats = {"dirs_walked": dirs_walked, "files_seen": 0, "files_dumped": 0,
                  "bytes_read": 0, "errors": 0, "files_skipped_ext": len(skipped_files)}
         _close_pool(smb_pool, session)
-        return f"=== SHARE {share_name} (0 files, {len(skipped_files)} skipped) ===", \
-               stats, [], skipped_files
+        return [], stats, skipped_files
 
     bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
     per_file = policy.dump_per_file_bytes
@@ -374,57 +377,178 @@ def _dump_single_share(session, host: str, share_name: str,
 
     session.budget.bytes_read += total_bytes
 
-    # Phase 3: assemble dump text (in original walk order, not completion order)
-    chunks = [f"=== SHARE {share_name} ({len(results)} files) ==="]
-    file_paths = []
+    # Phase 3: build file entries (in original walk order, not completion
+    # order). Rendering/splitting across context windows is the CALLER's job.
+    file_entries = []
     for f in file_list:
         path = f["path"]
         if path in results:
             r = results[path]
-            header = (f"---- {path} ({r['size']}B"
-                      f"{' head_truncated' if r['head_truncated'] else ''}) ----")
-            chunks.append(header + "\n" + r["content"])
-            file_paths.append(path)
-
-    notes = ""
-    if len(results) < len(file_list):
-        notes = (f"\nNOTE: {len(file_list) - len(results)} file(s) failed to read.\n")
-    if total_bytes >= bytes_left:
-        notes += "\nNOTE: byte budget exhausted — some files may be truncated.\n"
+            file_entries.append({"path": path, "content": r["content"],
+                                 "size": r["size"],
+                                 "head_truncated": r["head_truncated"]})
 
     stats = {"dirs_walked": dirs_walked, "files_seen": len(file_list),
              "files_dumped": len(results), "bytes_read": total_bytes, "errors": errors,
              "files_skipped_ext": len(skipped_files)}
     echo(f"[share] {host}/{share_name}: dump done — {len(results)} files, "
          f"{total_bytes // 1024}K read, {errors} error(s)")
-    dump_text = "\n".join(chunks) + notes
 
-    # context window safety: cap the dump so the first request doesn't blow
-    # the model's window (instruction ~1000 tokens + response ~16000 tokens,
-    # so the dump gets ~60% of the window, ~3 chars per token)
-    context_limit = policy.context_token_limit
-    if context_limit:
-        max_dump_chars = int(context_limit * 3 * 0.6)
+    return file_entries, stats, skipped_files
+
+
+def _max_dump_chars(policy: Policy) -> int:
+    """Char budget for ONE context window's worth of dump: ~60% of the
+    model's window (instruction ~1000 tokens + response ~16000 tokens take
+    the rest), ~3 chars per token. Falls back to 400K when no limit is set."""
+    if policy.context_token_limit:
+        return int(policy.context_token_limit * 3 * 0.6)
+    return _DEFAULT_GOAL_CHAR_BUDGET
+
+
+def _render_entry_text(entry: dict) -> str:
+    header = (f"---- {entry['path']} ({entry['size']}B"
+              f"{' head_truncated' if entry.get('head_truncated') else ''}) ----")
+    return header + "\n" + entry["content"]
+
+
+def _render_dump_text(file_entries: list[dict], share_name: str,
+                      notes: str = "") -> str:
+    chunks = [f"=== SHARE {share_name} ({len(file_entries)} files) ==="]
+    chunks.extend(_render_entry_text(e) for e in file_entries)
+    return "\n".join(chunks) + notes
+
+
+def _split_file_entries(file_entries: list[dict],
+                        max_chars: int) -> list[list[dict]]:
+    """Group file entries into context-safe batches. Files are never split
+    mid-content; a single file larger than a whole batch budget gets its own
+    batch with its content hard-truncated to fit (marked so the model knows
+    to page the rest with smb_read_file)."""
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    used = 0
+    for entry in file_entries:
+        entry_len = len(_render_entry_text(entry))
+        if current and used + entry_len > max_chars:
+            batches.append(current)
+            current, used = [], 0
+        if entry_len > max_chars and not current:
+            # single file exceeds a whole batch — hard-truncate to fit
+            truncated = dict(entry)
+            keep = max(0, max_chars - 600)  # header + truncation marker room
+            truncated["content"] = entry["content"][:keep] + (
+                f"\n[SINGLE FILE EXCEEDS CONTEXT BATCH — truncated at {keep} "
+                f"chars; page the rest with smb_read_file + offset]")
+            batches.append([truncated])
+            continue
+        current.append(entry)
+        used += entry_len
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _analyze_share_batches(credential: Credential, policy: Policy, audit,
+                           host: str, share_name: str,
+                           file_entries: list[dict], client_factory,
+                           echo, dc: str = "", domain_source: str = "auto",
+                           memory: str = "") -> dict:
+    """Analyze one share's dump, auto-splitting into multiple requests when
+    the content exceeds the model's context window (instead of truncating).
+    Each batch runs in a FRESH context window; a rolling summary carries
+    findings forward between batches (same machinery as share-per-context,
+    one level down). Per-batch checklist verification + findings extraction.
+
+    Returns {"report", "findings", "memory"} — findings already tagged with
+    host/share, memory is the rolling summary for the next share."""
+    from .findings import extract_findings
+    from .loop import AgentLoop
+    from .session import AgentSession
+
+    findings: list[dict] = []
+    reports: list[str] = []
+    batch_memory = ""
+
+    total_chars = sum(len(_render_entry_text(e)) for e in file_entries)
+    max_chars = _max_dump_chars(policy)
+    if total_chars <= max_chars or not file_entries:
+        batches = [file_entries]
     else:
-        max_dump_chars = _DEFAULT_GOAL_CHAR_BUDGET
-    if len(dump_text) > max_dump_chars:
-        original_len = len(dump_text)
-        # count how many files are actually included in the truncated text
-        included_paths = []
-        for line in dump_text[:max_dump_chars].split("\n"):
-            if line.strip().startswith("---- "):
-                included_paths.append(line.strip()[5:].split(" (")[0])
-        dump_text = dump_text[:max_dump_chars]
-        dump_text += (f"\n\n[DUMP TRUNCATED at context limit: {max_dump_chars} of "
-                      f"{original_len} chars. {len(included_paths)} of {len(file_paths)} "
-                      f"files fully included. Use smb_read_file + offset to read files "
-                      f"not included here.]")
-        file_paths = included_paths
-        echo(f"  ⚠ dump truncated to fit context ({max_dump_chars // 1000}K chars, "
-             f"{len(included_paths)}/{len(file_paths) + len(included_paths)} files)")
-        stats["files_dumped"] = len(included_paths)
+        batches = _split_file_entries(file_entries, max_chars)
+        echo(f"[share] {host}/{share_name}: dump {total_chars // 1000}K chars > "
+             f"context budget {max_chars // 1000}K — auto-split into "
+             f"{len(batches)} request(s) ({[len(b) for b in batches]} files)")
 
-    return dump_text, stats, file_paths, skipped_files
+    for i, batch in enumerate(batches, 1):
+        batch_note = (f"\nBATCH {i} OF {len(batches)}: this request contains "
+                      f"{len(batch)} of the share's {len(file_entries)} files. "
+                      f"Other batches are analyzed in separate requests — your "
+                      f"checklist covers ONLY the files below."
+                      if len(batches) > 1 else "")
+        memory_parts = []
+        if memory:
+            memory_parts.append(f"MEMORY from previous shares on {host}:\n{memory}")
+        if batch_memory:
+            memory_parts.append(f"MEMORY from previous batches of THIS share:\n{batch_memory}")
+        memory_block = (f"\n{batch_note}\n" + "\n\n".join(memory_parts) + "\n\n"
+                        if memory_parts or batch_note else "")
+        batch_chars = sum(len(_render_entry_text(e)) for e in batch)
+
+        goal = _SHARE_ANALYSIS_PROMPT.format(
+            host=host, share=share_name,
+            n_files=len(batch), size_kb=batch_chars // 1024,
+            memory_block=memory_block, incomplete="")
+        dump_text = _render_dump_text(batch, share_name)
+
+        share_session = AgentSession(credential, policy, audit, hosts=[host],
+                                     dc=dc, domain_source=domain_source)
+        loop = AgentLoop(client_factory(), share_session, policy, audit, echo=echo)
+        echo(f"[share] {host}/{share_name}: analyzing batch {i}/{len(batches)} "
+             f"({len(batch)} file(s), {batch_chars // 1000}K)...")
+        report = loop.run(goal + "\n\n" + dump_text)
+        if len(batches) > 1:
+            report = f"#### Batch {i}/{len(batches)}\n{report}"
+        reports.append(report)
+
+        # checklist verification for THIS batch (it saw only these files)
+        batch_paths = [e["path"] for e in batch]
+        if batch_paths:
+            missing = _verify_file_checklist(report, batch_paths)
+            if missing:
+                echo(f"[checklist] {host}/{share_name} batch {i}/{len(batches)}: "
+                     f"{len(missing)}/{len(batch_paths)} file(s) not accounted "
+                     f"for — sending corrective round")
+                corrective = _corrective_checklist_round(
+                    client_factory(), policy, share_name, missing, report, echo)
+                if corrective:
+                    report += "\n" + corrective
+                    reports[-1] = report
+            else:
+                echo(f"[checklist] {host}/{share_name} batch {i}/{len(batches)}: "
+                     f"all {len(batch_paths)} file(s) accounted for ✓")
+
+        # findings extraction per batch (double-pass union happens inside)
+        try:
+            batch_findings = extract_findings(client_factory(), policy,
+                                              loop.messages)
+            for f in batch_findings:
+                f["host"] = host
+                f["share"] = share_name
+            findings.extend(batch_findings)
+            echo(f"[share] {host}/{share_name} batch {i}/{len(batches)}: "
+                 f"{len(batch_findings)} finding(s)")
+        except Exception as exc:  # noqa: BLE001
+            echo(f"[share] {host}/{share_name} batch {i}/{len(batches)}: "
+                 f"extraction failed — {exc}")
+
+        # rolling summary: carries THIS batch's findings to the next batch
+        if len(batches) > 1:
+            batch_memory = _generate_share_summary(
+                client_factory(), policy, share_name, report, echo)
+
+    return {"report": "\n\n".join(reports), "findings": findings,
+            "memory": batch_memory or memory}
 
 
 def _parse_checklist_paths(report_md: str) -> set[str]:
@@ -563,8 +687,6 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
     share use ThreadPoolExecutor (SMB I/O parallelism). LLM analysis is
     sequential (one share at a time — avoids rate-limit storms)."""
     from .audit import AuditLog
-    from .findings import extract_findings
-    from .loop import AgentLoop
     from .session import AgentSession
     from ..report import write_report
 
@@ -592,7 +714,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
             # Phase 1: dump THIS share — parallel file reads (SMB I/O)
             echo(f"[share] ({si}/{len(dumpable)}) {host}/{share_name}: dumping...")
-            share_dump, share_stats, dumped_paths, skipped_ext = _dump_single_share(
+            file_entries, share_stats, skipped_ext = _dump_single_share(
                 session, host, share_name, policy, echo,
                 read_threads=read_threads)
             for key in total_dump_stats:
@@ -600,64 +722,23 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             entry["bytes_read"] = session.budget.bytes_read
             entry["dump_stats"] = dict(total_dump_stats)
 
-            # Phase 2: fresh context window for THIS share (sequential — one LLM call at a time)
-            memory_block = (f"\nMEMORY from previous shares on {host}:\n{memory}\n\n"
-                            if memory else "")
-            goal = _SHARE_ANALYSIS_PROMPT.format(
-                host=host, share=share_name,
-                n_files=share_stats.get("files_dumped", 0),
-                size_kb=share_stats.get("bytes_read", 0) // 1024,
-                memory_block=memory_block,
-                incomplete="")
-
+            # Phase 2: analyze THIS share — fresh context window per share,
+            # AUTO-SPLIT into multiple requests when the dump exceeds the
+            # context window (per-batch windows + rolling summary)
             echo(f"[share] {host}/{share_name}: dump done "
                  f"({share_stats['files_dumped']} files) — analyzing...")
-            share_session = AgentSession(credential, policy, audit,
-                                         hosts=[host], dc=dc,
-                                         domain_source=domain_source)
-            share_loop = AgentLoop(client_factory(), share_session,
-                                   policy, audit, echo=echo)
-            share_report = share_loop.run(goal + "\n\n" + share_dump)
-
-            # Phase 2b: verify file checklist coverage (catch AI skipping files)
-            if dumped_paths:
-                missing = _verify_file_checklist(share_report, dumped_paths)
-                if missing:
-                    echo(f"[checklist] {host}/{share_name}: "
-                         f"{len(missing)}/{len(dumped_paths)} file(s) not accounted for "
-                         f"— sending corrective round")
-                    corrective = _corrective_checklist_round(
-                        client_factory(), policy, share_name, missing,
-                        share_report, echo)
-                    if corrective:
-                        share_report += "\n" + corrective
-                        # re-verify after correction
-                        still_missing = _verify_file_checklist(share_report, dumped_paths)
-                        if still_missing:
-                            echo(f"[checklist] {host}/{share_name}: "
-                                 f"{len(still_missing)} file(s) STILL missing after "
-                                 f"correction — proceeding with partial coverage")
-                else:
-                    echo(f"[checklist] {host}/{share_name}: "
-                         f"all {len(dumped_paths)} file(s) accounted for ✓")
+            result = _analyze_share_batches(
+                credential, policy, audit, host, share_name, file_entries,
+                client_factory, echo, dc=dc, domain_source=domain_source,
+                memory=memory)
+            share_report = result["report"]
+            memory = result["memory"]
 
             all_reports.append(f"### {share_name}\n{share_report}")
             all_skipped.extend(skipped_ext)
-
-            # Extract findings from THIS share's conversation
-            try:
-                share_findings = extract_findings(
-                    client_factory(), policy, share_loop.messages)
-                for f in share_findings:
-                    f["share"] = share_name
-                all_findings.extend(share_findings)
-                echo(f"[share] {host}/{share_name}: {len(share_findings)} finding(s)")
-            except Exception as exc:  # noqa: BLE001
-                echo(f"[share] {host}/{share_name}: extraction failed — {exc}")
-
-            # Phase 3: generate rolling summary for the next share
-            memory = _generate_share_summary(
-                client_factory(), policy, share_name, share_report, echo)
+            all_findings.extend(result["findings"])
+            echo(f"[share] {host}/{share_name}: {len(result['findings'])} "
+                 f"finding(s) total")
 
             entry["tool_calls"] = session.budget.tool_calls
 

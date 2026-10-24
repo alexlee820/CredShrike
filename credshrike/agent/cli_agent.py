@@ -174,11 +174,8 @@ def cmd_agent(args) -> None:
     # full (single host): code-side parallel dump + config banner, same as
     # full-domain but for just the specified host(s)
     if preset == "full":
-        from .orchestrator import _dump_single_share, \
-            _SHARE_ANALYSIS_PROMPT, _verify_file_checklist, _corrective_checklist_round
+        from .orchestrator import _dump_single_share, _analyze_share_batches
         from .session import AgentSession
-        from .loop import AgentLoop
-        from .findings import extract_findings
         from ..report import write_report
         from pathlib import Path
 
@@ -202,50 +199,28 @@ def cmd_agent(args) -> None:
                 print(f"[agent] {host}: {len(dumpable)} share(s) to analyze")
 
                 all_findings, all_reports, all_skipped = [], [], []
+                memory = ""    # rolling summary across shares
                 for si, share_info in enumerate(dumpable, 1):
                     share_name = share_info["name"]
-                    dump_text, stats, dumped_paths, skipped = _dump_single_share(
+                    file_entries, stats, skipped = _dump_single_share(
                         session, host, share_name, policy,
                         lambda l: print(l), read_threads=concurrency)
                     all_skipped.extend(skipped)
                     session.budget.bytes_read += stats.get("bytes_read", 0)
 
-                    # LLM analysis (one share = one context window)
-                    goal = _SHARE_ANALYSIS_PROMPT.format(
-                        host=host, share=share_name,
-                        n_files=stats.get("files_dumped", 0),
-                        size_kb=stats.get("bytes_read", 0) // 1024,
-                        memory_block="", incomplete="")
-
+                    # LLM analysis: one share = one context window, auto-split
+                    # into multiple requests when the dump exceeds it
                     print(f"[share] {host}/{share_name}: analyzing...")
-                    share_session = AgentSession(credential, policy, audit,
-                                                hosts=[host], dc=args.dc or "")
-                    loop = AgentLoop(_make_client(policy), share_session,
-                                    policy, audit, echo=lambda l: print(l))
-                    share_report = loop.run(goal + "\n\n" + dump_text)
-                    all_reports.append(f"### {share_name}\n{share_report}")
-
-                    # checklist verification
-                    missing = _verify_file_checklist(share_report, dumped_paths)
-                    if missing:
-                        print(f"[checklist] {share_name}: {len(missing)} file(s) missing")
-                        corrective = _corrective_checklist_round(
-                            _make_client(policy), policy, share_name, missing,
-                            share_report, lambda l: print(l))
-                        if corrective:
-                            share_report += "\n" + corrective
-                            all_reports[-1] = f"### {share_name}\n{share_report}"
-
-                    # findings extraction
-                    try:
-                        share_findings = extract_findings(
-                            _make_client(policy), policy, loop.messages)
-                        for f in share_findings:
-                            f["share"] = share_name
-                        all_findings.extend(share_findings)
-                        print(f"[share] {host}/{share_name}: {len(share_findings)} finding(s)")
-                    except Exception as exc:
-                        print(f"[share] {host}/{share_name}: extraction failed — {exc}")
+                    result = _analyze_share_batches(
+                        credential, policy, audit, host, share_name,
+                        file_entries, lambda: _make_client(policy),
+                        lambda l: print(l), dc=args.dc or "",
+                        domain_source=args.source, memory=memory)
+                    memory = result["memory"]
+                    all_reports.append(f"### {share_name}\n{result['report']}")
+                    all_findings.extend(result["findings"])
+                    print(f"[share] {host}/{share_name}: "
+                          f"{len(result['findings'])} finding(s)")
 
                 # generate report
                 report_md = "\n\n".join(all_reports)

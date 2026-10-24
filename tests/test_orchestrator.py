@@ -15,10 +15,13 @@ from credshrike.domain.base import ComputerRecord
 def _client_factory_for_hosts(hosts_findings: dict):
     """Fake client that handles ALL call types in the per-share architecture.
     Detects call type by inspecting the last user message:
+    - analysis (contains 'FILE CHECKLIST' — the share/batch analysis prompt) →
+      captures the goal, returns generic report text
     - extraction (mentions 'findings' + 'JSON') → returns findings JSON
-    - summary (mentions 'Summarize') → returns summary text
-    - analysis (anything else) → returns generic report text
-    Findings queue is consumed in order for extraction calls."""
+    - corrective (mentions 'INCOMPLETE') → returns checklist lines
+    - summary (the rolling-summary prompt) → returns summary text
+    NOTE: analysis must be detected BEFORE summary — the analysis prompt
+    also contains the word 'SUMMARY' (PART 3)."""
     findings_queue = [f for host_fl in hosts_findings.values() for f in host_fl]
     state = {"goals": [], "total_calls": 0}
 
@@ -33,6 +36,14 @@ def _client_factory_for_hosts(hosts_findings: dict):
                            " ".join(getattr(b, "text", "") for b in last_content)
                 else:
                     text = ""
+
+                # Analysis call — capture the goal (checked first: the
+                # analysis prompt itself contains 'SUMMARY' and 'FINDINGS')
+                if "FILE CHECKLIST" in text:
+                    state["goals"].append(messages)
+                    return SimpleNamespace(stop_reason="end_turn",
+                                           content=[SimpleNamespace(
+                                               type="text", text="share analysis report")])
 
                 # Extraction call — serve all findings (double-pass union dedupes)
                 if "JSON" in text and "findings" in text.lower():
@@ -56,11 +67,9 @@ def _client_factory_for_hosts(hosts_findings: dict):
                                            content=[SimpleNamespace(
                                                type="text", text="Summary: credentials found.")])
 
-                # Analysis call — capture the goal
-                state["goals"].append(messages)
                 return SimpleNamespace(stop_reason="end_turn",
                                        content=[SimpleNamespace(
-                                           type="text", text="share analysis report")])
+                                           type="text", text="")])
         return SimpleNamespace(messages=Msgs())
 
     factory.state = state
@@ -210,3 +219,46 @@ def test_parallel_file_reads_and_sequential_hosts(tmp_path, fake_smb):
     assert order == expected    # sequential host order preserved
     assert "read_threads=4" in "".join(lines)  # log mentions parallel reads
     assert os.path.exists(result["index_html"])
+
+
+def test_dump_auto_splits_into_batches(tmp_path, fake_smb):
+    """A share whose dump exceeds the context budget is SPLIT into multiple
+    analysis requests (fresh context window each, rolling summary between
+    them) instead of truncated — every file still reaches the model."""
+    big = "X" * 2000 + "\n"                      # ~2029 rendered chars per file
+    fake_smb.list_dir = lambda share, path="", max_entries=200: {
+        "share": share, "path": path,
+        "entries": [{"name": f"big{i}.txt", "is_dir": False, "size": 2000}
+                    for i in range(6)],
+        "truncated": False, "total_seen": 6}
+    fake_smb.file_contents = {f"big{i}.txt": big.encode() for i in range(6)}
+
+    policy = Policy()
+    policy.context_token_limit = 2800             # budget = 2800*3*0.6 = 5040
+    # → 2 files per batch (~4058 chars), 6 files → exactly 3 batches
+    lines = []
+    factory = _client_factory_for_hosts({"ws01.corp.local": []})
+    result = run_domain_sweep(
+        credential=_credential(), policy=policy, audit_dir=str(tmp_path),
+        client_factory=factory, echo=lines.append,
+        source_override=lambda: [ComputerRecord(cn="WS01", dns_name="ws01.corp.local")],
+        reachable_check=lambda host: True)
+
+    entry = result["hosts"][0]
+    assert entry["status"] == "done"
+    assert entry["dump_stats"]["files_dumped"] == 6   # nothing dropped
+    assert any("auto-split into 3 request(s)" in l for l in lines)
+
+    goals = [str(m[0]["content"]) for m in factory.state["goals"]]
+    assert len(goals) == 3                            # one analysis call per batch
+    # each batch goal is context-sized and carries its OWN files only
+    for g in goals:
+        assert "BATCH" in g and "big" in g
+        assert len(g) < 6000                          # fits the ~5040-char budget
+    assert sum(g.count("---- big") for g in goals) == 6  # every file sent once
+    # batch 2+ carries the rolling summary from batch 1 (not batch 1 itself)
+    assert "MEMORY from previous batches" not in goals[0]
+    assert "MEMORY from previous batches" in goals[1]
+    # reports from all batches joined into one share report
+    assert entry["report_md"].count("#### Batch") == 3
+    assert any("batch 1/3" in l for l in lines)

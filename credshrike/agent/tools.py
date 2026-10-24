@@ -182,15 +182,17 @@ def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
 
 def _smb_dump_share(ctx: AgentSession, args: dict) -> Any:
     """Full-content dump with parallel reads + skip extensions (same infra as orchestrator)."""
-    from .orchestrator import _dump_single_share
+    from .orchestrator import _dump_single_share, _render_dump_text
 
     host = args["host"]
     ctx.share_inventories[host] = ctx.smb(host).list_shares()
-    dump_text, stats, file_paths, skipped = _dump_single_share(
+    file_entries, stats, skipped = _dump_single_share(
         ctx, host, args["share"], ctx.policy,
         ctx.emit, read_threads=ctx.read_threads)
     ctx.budget.bytes_read += int(stats.get("bytes_read", 0))
 
+    file_paths = [e["path"] for e in file_entries]
+    dump_text = _render_dump_text(file_entries, args["share"]) if file_entries else ""
     return {"share": args["share"], "files": file_paths,
             "files_total": len(file_paths), "skipped_ext": len(skipped),
             "stats": stats, "dump_text": dump_text[:8000],
