@@ -147,16 +147,11 @@ def _resolve_preset(args) -> Optional[str]:
 
 
 def cmd_agent(args) -> None:
-    # full-domain: per-computer fan-out (each host gets its own context window;
-    # every file is dumped code-side and embedded — the model never has to
-    # decide to fetch the bulk)
+    # full-domain: per-computer fan-out with orchestrator
     if _resolve_preset(args) == "full-domain":
         from .orchestrator import run_domain_sweep
         credential = build_credential(args)
         policy = _load_policy(args)
-        print(f"[domain] credential {credential.redacted()['principal']} "
-              f"({credential.redacted()['auth_type']}) | model {policy.model} | "
-              f"dc {args.dc or '-'} | source {args.source}")
         run_domain_sweep(credential=credential, policy=policy,
                          audit_dir=args.audit_dir, dc=args.dc or "",
                          domain_source=args.source,
@@ -165,6 +160,110 @@ def cmd_agent(args) -> None:
                          concurrency=args.concurrency or 1)
         return
 
+    # full (single host): code-side parallel dump + config banner, same as
+    # full-domain but for just the specified host(s)
+    if _resolve_preset(args) == "full":
+        from .orchestrator import _print_config_banner, _dump_single_share, \
+            _SHARE_ANALYSIS_PROMPT, _verify_file_checklist, _corrective_checklist_round
+        from .session import AgentSession
+        from .loop import AgentLoop
+        from .findings import extract_findings
+        from ..report import write_report
+        from pathlib import Path
+
+        credential = build_credential(args)
+        policy = _load_policy(args)
+        concurrency = args.concurrency or 1
+
+        # config banner
+        _print_config_banner(credential, policy, args.dc or "", args.source,
+                            concurrency, lambda l: print(l))
+
+        hosts = [h.strip() for h in (args.host or "").split(",") if h.strip()]
+        if not hosts:
+            print("[error] --preset full requires --host <hostname>")
+            return
+
+        audit_dir = args.audit_dir
+        for host in hosts:
+            print(f"\n[agent] ── {host} ──")
+            audit = AuditLog.new_run(audit_dir, suffix=host)
+            session = AgentSession(credential, policy, audit, hosts=[host],
+                                   dc=args.dc or "", domain_source=args.source)
+            try:
+                # get shares, dump each in parallel
+                shares = session.smb(host).list_shares()
+                session.share_inventories[host] = shares
+                dumpable = [s for s in shares if not s.get("special")]
+                print(f"[agent] {host}: {len(dumpable)} share(s) to analyze")
+
+                all_findings, all_reports, all_skipped = [], [], []
+                for si, share_info in enumerate(dumpable, 1):
+                    share_name = share_info["name"]
+                    dump_text, stats, dumped_paths, skipped = _dump_single_share(
+                        session, host, share_name, policy,
+                        lambda l: print(l), read_threads=concurrency)
+                    all_skipped.extend(skipped)
+                    session.budget.bytes_read += stats.get("bytes_read", 0)
+
+                    # LLM analysis (one share = one context window)
+                    goal = _SHARE_ANALYSIS_PROMPT.format(
+                        host=host, share=share_name,
+                        n_files=stats.get("files_dumped", 0),
+                        size_kb=stats.get("bytes_read", 0) // 1024,
+                        memory_block="", incomplete="")
+
+                    print(f"[share] {host}/{share_name}: analyzing...")
+                    share_session = AgentSession(credential, policy, audit,
+                                                hosts=[host], dc=args.dc or "")
+                    loop = AgentLoop(_make_client(policy), share_session,
+                                    policy, audit, echo=lambda l: print(l))
+                    share_report = loop.run(goal + "\n\n" + dump_text)
+                    all_reports.append(f"### {share_name}\n{share_report}")
+
+                    # checklist verification
+                    missing = _verify_file_checklist(share_report, dumped_paths)
+                    if missing:
+                        print(f"[checklist] {share_name}: {len(missing)} file(s) missing")
+                        corrective = _corrective_checklist_round(
+                            _make_client(policy), policy, share_name, missing,
+                            share_report, lambda l: print(l))
+                        if corrective:
+                            share_report += "\n" + corrective
+                            all_reports[-1] = f"### {share_name}\n{share_report}"
+
+                    # findings extraction
+                    try:
+                        share_findings = extract_findings(
+                            _make_client(policy), policy, loop.messages)
+                        for f in share_findings:
+                            f["share"] = share_name
+                        all_findings.extend(share_findings)
+                        print(f"[share] {host}/{share_name}: {len(share_findings)} finding(s)")
+                    except Exception as exc:
+                        print(f"[share] {host}/{share_name}: extraction failed — {exc}")
+
+                # generate report
+                report_md = "\n\n".join(all_reports)
+                html_path = str(Path(audit.path).with_suffix(".report.html"))
+                write_report(html_path,
+                             context={"principal": credential.redacted()["principal"],
+                                      "auth_type": credential.redacted()["auth_type"],
+                                      "scope": [host], "model": policy.model,
+                                      "endpoint": policy.api_base_url or "api.anthropic.com"},
+                             findings=all_findings,
+                             scan_results=[], flagged=[],
+                             report_md=report_md,
+                             audit_path=audit.path,
+                             share_inventories=session.share_inventories,
+                             skipped_files=all_skipped)
+                print(f"\n[agent] {host}: done — report {html_path}")
+                print("\n" + report_md[:2000] + ("\n... (full report in HTML)" if len(report_md) > 2000 else ""))
+            finally:
+                session.close()
+        return
+
+    # everything else: regular agent loop (custom goal, snaffler)
     session, policy, audit = _build_session(args)
     red = session.credential.redacted()
     print(f"[agent] credential {red['principal']} ({red['auth_type']}) | "
@@ -180,8 +279,6 @@ def cmd_agent(args) -> None:
         goal = args.goal
         if not goal and args.preset == "snaffler":
             goal = SNAFFLER_PRESET
-        elif not goal and args.preset == "full":
-            goal = FULL_PRESET
         if goal:
             report = loop.run(goal)
             print(report)

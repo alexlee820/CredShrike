@@ -216,7 +216,12 @@ def test_full_preset_goal(client, fake_client):
     s = _wait_status(client, run_id, {"done", "error"})
     assert s["status"] == "done", s.get("error")
     first_user = fake_client.messages.requests[0]["messages"][0]
-    assert "FULL-CONTENT review" in str(first_user.get("content", ""))
+    # 'full' preset with host now routes through the orchestrator (parallel
+    # dump + config banner); the goal contains the share analysis prompt
+    assert "SHARE" in str(first_user.get("content", "")) or \
+           "share" in str(first_user.get("content", "")) or \
+           "FILE CHECKLIST" in str(first_user.get("content", "")) or \
+           "dump" in str(first_user.get("content", ""))
     assert "smb_dump_share" in str(first_user.get("content", ""))
 
 

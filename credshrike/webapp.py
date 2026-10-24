@@ -132,6 +132,33 @@ def _execute_run(state: RunState) -> None:
         # default preset: bare runs (no preset AND no goal) → full-domain sweep
         effective_preset = params.get("preset") or \
             ("" if params.get("goal") else "full-domain")
+
+        # 'full' preset with specific host(s) → orchestrator scoped to those hosts
+        # (gets parallel dump + config banner, same as full-domain)
+        if effective_preset == "full" and params.get("host"):
+            from .agent.orchestrator import run_domain_sweep
+            from .domain.base import ComputerRecord
+            host_list = [h.strip() for h in params["host"].split(",") if h.strip()]
+            summary = run_domain_sweep(
+                credential=credential, policy=policy,
+                audit_dir=params.get("audit_dir") or "runs",
+                dc=params.get("dc") or "",
+                domain_source=params.get("domain_source") or "auto",
+                client_factory=lambda: (_client_factory() if _client_factory
+                                        else _build_client(params)),
+                echo=state.push,
+                source_override=lambda: [ComputerRecord(cn=h.split(".")[0], dns_name=h)
+                                        for h in host_list],
+                concurrency=int(params.get("concurrency") or 1))
+            done = sum(1 for h in summary["hosts"] if h["status"] == "done")
+            state.report = (f"Full scan: {done}/{len(summary['hosts'])} host(s), "
+                            f"{len(summary['merged']['credentials'])} credential(s). "
+                            f"Report: {summary['index_html']}")
+            state.report_html_path = summary["index_html"]
+            state.audit_path = summary["run_dir"]
+            state.status = "done"
+            return
+
         if effective_preset == "full-domain":
             from .agent.orchestrator import run_domain_sweep
             summary = run_domain_sweep(
