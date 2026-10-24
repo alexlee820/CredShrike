@@ -193,95 +193,105 @@ def _extract_office_text(raw_bytes: bytes, ext: str) -> str:
 
 def _walk_share_files(smb_session, share_name: str, depth: int,
                        max_files: int, echo,
-                       skip_exts: Optional[set] = None) -> tuple[list[dict], int, list[dict]]:
-    """Phase 1 (sequential, fast): walk directory tree, return file metadata
-    list [{path, size}] without reading any file content. Files with skipped
-    extensions are tracked separately in `skipped` for the report."""
+                       skip_exts: Optional[set] = None,
+                       conn_pool=None, walk_threads: int = 1) -> tuple[list[dict], int, list[dict]]:
+    """Phase 1: walk directory tree using PARALLEL BFS. All directories at
+    the same level are listed concurrently. Each listing borrows its own
+    connection from the pool (SMB is not thread-safe)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     skip = skip_exts if skip_exts is not None else DEFAULT_SKIP_EXTENSIONS
     files: list[dict] = []
     skipped: list[dict] = []
-    queue: list[tuple[str, int]] = [("", 0)]
     seen_dirs: set[str] = set()
     dirs_walked = 0
 
-    while queue:
-        current, level = queue.pop(0)
-        if current in seen_dirs:
-            continue
-        seen_dirs.add(current)
-        dirs_walked += 1
-        echo(f"  ⋮ walk {current or '/'}")
+    def _list_one_dir(dir_path: str):
+        """List one directory. Returns (path, listing_or_None, error_or_None)."""
+        conn = conn_pool.get(timeout=30) if conn_pool else smb_session
         try:
-            listing = smb_session.list_dir(share_name, current, max_entries=1000)
+            listing = conn.list_dir(share_name, dir_path, max_entries=1000)
+            return dir_path, listing, None
         except Exception as exc:  # noqa: BLE001
-            echo(f"  ! walk_error: {current} — {str(exc)[:80]}")
-            continue
-        for entry in listing.get("entries", []):
-            name = entry.get("name", "")
-            if name in (".", ".."):
+            return dir_path, None, str(exc)[:80]
+        finally:
+            if conn_pool:
+                conn_pool.put(conn)
+
+    # BFS level by level: all dirs at the same level listed in parallel
+    current_level: list[tuple[str, int]] = [("", 0)]
+    while current_level and len(files) < max_files:
+        next_level: list[tuple[str, int]] = []
+        use_pool = walk_threads > 1 and len(current_level) > 1 and conn_pool
+
+        if use_pool:
+            with ThreadPoolExecutor(max_workers=min(walk_threads, len(current_level))) as pool:
+                futures = {pool.submit(_list_one_dir, d): (d, lvl) for d, lvl in current_level}
+                results = {futures[f]: f.result() for f in as_completed(futures)}
+        else:
+            results = {(d, l): _list_one_dir(d) for d, l in current_level}
+
+        for (dir_path, level), (res_path, listing, err) in results.items():
+            if res_path in seen_dirs:
                 continue
-            child = f"{current}/{name}" if current else name
-            if entry.get("is_dir"):
-                if level < depth:
-                    queue.append((child, level + 1))
-            else:
-                ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
-                if ext in skip:
-                    skipped.append({"path": child, "size": entry.get("size", 0),
-                                    "ext": ext})
-                else:
-                    files.append({"path": child, "size": entry.get("size", 0)})
-                    if len(files) >= max_files:
-                        queue.clear()
-                        break
+            seen_dirs.add(res_path)
+            dirs_walked += 1
+            if err:
+                echo(f"  ! walk_error: {res_path or '/'} — {err}")
+                continue
+            echo(f"  ⋮ walk {res_path or '/'}")
+            for entry in listing.get("entries", []):
+                if len(files) >= max_files:
+                    break
+                name = entry.get("name", "")
+                if name in (".", ".."):
+                    continue
+                child = f"{res_path}/{name}" if res_path else name
+                if entry.get("is_dir") and level < depth:
+                    next_level.append((child, level + 1))
+                elif not entry.get("is_dir"):
+                    ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+                    if ext in skip:
+                        skipped.append({"path": child, "size": entry.get("size", 0), "ext": ext})
+                    else:
+                        files.append({"path": child, "size": entry.get("size", 0)})
+        current_level = next_level
+
     echo(f"  ⋮ walk done: {dirs_walked} dirs, {len(files)} to read, "
          f"{len(skipped)} skipped (ext)")
     return files, dirs_walked, skipped
 
 
+def _close_pool(pool, original_session):
+    """Close pool connections (but not the original session's connection)."""
+    from queue import Empty as QueueEmpty
+    while True:
+        try:
+            reader = pool.get_nowait()
+        except QueueEmpty:
+            break
+        if reader is not original_session:
+            try:
+                reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _dump_single_share(session, host: str, share_name: str,
                         policy: Policy, echo,
                         read_threads: int = 4) -> tuple[str, dict, list[str]]:
-    """Dump ONE share using PARALLEL file reads. Phase 1 walks the directory
-    tree (sequential, fast). Phase 2 reads all files concurrently via
-    ThreadPoolExecutor (SMB I/O parallelism). Results are assembled into the
-    dump text. Returns (dump_text, stats, file_paths)."""
+    """Dump ONE share: Phase 1 walks directory tree (parallel BFS), Phase 2
+    reads all files concurrently (ThreadPool). Both phases share a connection
+    pool (one SMB connection per thread — SMB is not thread-safe)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import base64 as _b64
-    from ..scanner import dump_share  # fallback for tier info if needed
-
-    # Phase 1: walk (sequential — just directory listings, no file content)
-    echo(f"[share] {host}/{share_name}: walking directory tree...")
-    file_list, dirs_walked, skipped_files = _walk_share_files(
-        session.smb(host), share_name,
-        policy.dump_depth, policy.dump_max_files, echo,
-        skip_exts=set(policy.dump_skip_exts))
-    if not file_list:
-        stats = {"dirs_walked": dirs_walked, "files_seen": 0, "files_dumped": 0,
-                 "bytes_read": 0, "errors": 0, "files_skipped_ext": len(skipped_files)}
-        return f"=== SHARE {share_name} (0 files, {len(skipped_files)} skipped) ===", \
-               stats, [], skipped_files
-
-    bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
-    per_file = policy.dump_per_file_bytes
-
-    # Phase 2: read all files in parallel using a CONNECTION POOL
-    # (impacket's SMBConnection is NOT thread-safe — each thread needs
-    #  its own TCP connection to avoid protocol message interleaving)
-    echo(f"[share] {host}/{share_name}: reading {len(file_list)} files "
-         f"({read_threads} threads)...")
-    results: dict[str, dict] = {}
-    total_bytes = 0
-    errors = 0
-
-    from .session import AgentSession
     from queue import Queue
-
-    # create one SMB connection per thread (SMBConnection is NOT thread-safe)
-    # fall back to the original session if pool creation fails (tests/mocks)
-    smb_pool: Queue = Queue()
     from ..smb_session import SMBSession
-    for i in range(max(1, read_threads)):
+
+    # Create connection pool FIRST — shared by walk + read phases
+    n_threads = max(1, read_threads)
+    smb_pool: Queue = Queue()
+    for i in range(n_threads):
         try:
             reader = SMBSession(session.credential, host, timeout=30)
             reader.connect()
@@ -289,11 +299,34 @@ def _dump_single_share(session, host: str, share_name: str,
         except Exception:  # noqa: BLE001 — pool creation failed (mock/no network)
             pass
     if smb_pool.qsize() == 0:
-        # fall back: use the original session's connection (works with mocks)
-        smb_pool.put(session)
-        echo(f"  ⋮ using shared connection (pool creation unavailable)")
+        smb_pool.put(session.smb(host))  # fall back to original session (mocks)
+        echo(f"  ⋮ using shared connection (pool unavailable)")
     else:
-        echo(f"  ⋮ {smb_pool.qsize()} SMB connection(s) in reader pool")
+        echo(f"  ⋮ {smb_pool.qsize()} SMB connection(s) in pool")
+
+    # Phase 1: walk directory tree (parallel BFS — dirs at same level listed concurrently)
+    echo(f"[share] {host}/{share_name}: walking directory tree...")
+    file_list, dirs_walked, skipped_files = _walk_share_files(
+        session.smb(host), share_name,
+        policy.dump_depth, policy.dump_max_files, echo,
+        skip_exts=set(policy.dump_skip_exts),
+        conn_pool=smb_pool, walk_threads=n_threads)
+    if not file_list:
+        stats = {"dirs_walked": dirs_walked, "files_seen": 0, "files_dumped": 0,
+                 "bytes_read": 0, "errors": 0, "files_skipped_ext": len(skipped_files)}
+        _close_pool(smb_pool, session)
+        return f"=== SHARE {share_name} (0 files, {len(skipped_files)} skipped) ===", \
+               stats, [], skipped_files
+
+    bytes_left = policy.max_total_read_bytes - session.budget.bytes_read
+    per_file = policy.dump_per_file_bytes
+
+    # Phase 2: read all files in parallel (uses the shared pool from above)
+    echo(f"[share] {host}/{share_name}: reading {len(file_list)} files "
+         f"({n_threads} threads)...")
+    results: dict[str, dict] = {}
+    total_bytes = 0
+    errors = 0
 
     def _read_one(file_info):
         path = file_info["path"]
@@ -303,7 +336,7 @@ def _dump_single_share(session, host: str, share_name: str,
         reader = smb_pool.get()   # borrow a connection
         try:
             echo(f"  ⟐ [T{short_thread}] {path}")
-            read = reader.smb(host).read_file(share_name, path, max_bytes=per_file)
+            read = reader.read_file(share_name, path, max_bytes=per_file)
             data = _b64.b64decode(read.get("content_b64", ""))
             echo(f"  ✓ [T{short_thread}] {path} ({len(data)}B)")
 
@@ -335,16 +368,8 @@ def _dump_single_share(session, host: str, share_name: str,
             else:
                 errors += 1
 
-    # close only the pool-created connections (not the original session)
-    while not smb_pool.empty():
-        reader = smb_pool.get_nowait()
-        if reader is not session:  # don't close the original session
-            try:
-                reader.close()
-            except Exception:  # noqa: BLE001
-                pass
-
-    echo(f"  ⋮ pool closed. {read_threads} thread(s) read "
+    _close_pool(smb_pool, session)
+    echo(f"  ⋮ pool closed. {n_threads} thread(s) read "
          f"{len(results)}/{len(file_list)} files, {total_bytes // 1024}K, {errors} error(s)")
 
     session.budget.bytes_read += total_bytes
