@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import time
 import uuid
@@ -414,9 +415,26 @@ def run_artifact(run_id, filename):
         return Response(fh.read(), mimetype="text/html")
 
 
+def _find_free_port(bind: str, port: int, max_attempts: int = 20) -> int:
+    """First port >= `port` that binds cleanly (probe socket). If the next
+    `max_attempts` ports are all taken, return the original port so app.run
+    surfaces the bind error as before."""
+    for candidate in range(port, port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((bind, candidate))
+            except OSError:
+                continue
+            return candidate
+    return port
+
+
 def serve(bind: str = "127.0.0.1", port: int = 8080):
-    print(f"[ui] http://{bind}:{port}  (local only — the form holds real credentials)")
-    app.run(host=bind, port=port, threaded=True)
+    free = _find_free_port(bind, port)
+    if free != port:
+        print(f"[ui] port {port} busy — using {free} instead")
+    print(f"[ui] http://{bind}:{free}  (local only — the form holds real credentials)")
+    app.run(host=bind, port=free, threaded=True)
 
 
 def register(subparsers) -> None:

@@ -305,3 +305,19 @@ def test_full_domain_per_host_links_served(client, monkeypatch):
     assert per_host.status_code == 200 and "CredShrike" in per_host.get_data(as_text=True)
     # traversal is refused
     assert client.get(f"/api/runs/{run_id}/..%5Csecret.txt").status_code in (400, 404)
+
+
+def test_port_bumps_when_occupied():
+    """serve() must auto-increment the port instead of dying on bind error."""
+    import socket as _socket
+    from credshrike.webapp import _find_free_port
+    blocker = _socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    port = blocker.getsockname()[1]
+    blocker.listen(1)
+    try:
+        assert _find_free_port("127.0.0.1", port) > port
+        # free port requested → returned unchanged (no unnecessary bump)
+        assert _find_free_port("127.0.0.1", port + 100) == port + 100
+    finally:
+        blocker.close()
