@@ -397,7 +397,34 @@ def _dump_single_share(session, host: str, share_name: str,
              "files_skipped_ext": len(skipped_files)}
     echo(f"[share] {host}/{share_name}: dump done — {len(results)} files, "
          f"{total_bytes // 1024}K read, {errors} error(s)")
-    return "\n".join(chunks) + notes, stats, file_paths, skipped_files
+    dump_text = "\n".join(chunks) + notes
+
+    # context window safety: cap the dump so the first request doesn't blow
+    # the model's window (instruction ~1000 tokens + response ~16000 tokens,
+    # so the dump gets ~60% of the window, ~3 chars per token)
+    context_limit = policy.context_token_limit
+    if context_limit:
+        max_dump_chars = int(context_limit * 3 * 0.6)
+    else:
+        max_dump_chars = _DEFAULT_GOAL_CHAR_BUDGET
+    if len(dump_text) > max_dump_chars:
+        original_len = len(dump_text)
+        # count how many files are actually included in the truncated text
+        included_paths = []
+        for line in dump_text[:max_dump_chars].split("\n"):
+            if line.strip().startswith("---- "):
+                included_paths.append(line.strip()[5:].split(" (")[0])
+        dump_text = dump_text[:max_dump_chars]
+        dump_text += (f"\n\n[DUMP TRUNCATED at context limit: {max_dump_chars} of "
+                      f"{original_len} chars. {len(included_paths)} of {len(file_paths)} "
+                      f"files fully included. Use smb_read_file + offset to read files "
+                      f"not included here.]")
+        file_paths = included_paths
+        echo(f"  ⚠ dump truncated to fit context ({max_dump_chars // 1000}K chars, "
+             f"{len(included_paths)}/{len(file_paths) + len(included_paths)} files)")
+        stats["files_dumped"] = len(included_paths)
+
+    return dump_text, stats, file_paths, skipped_files
 
 
 def _parse_checklist_paths(report_md: str) -> set[str]:

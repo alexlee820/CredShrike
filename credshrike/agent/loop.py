@@ -240,11 +240,23 @@ class AgentLoop:
         last_error = None
         for attempt in range(self.RATE_LIMIT_RETRIES):
             try:
-                return self.client.messages.create(**kwargs)
+                resp = self.client.messages.create(**kwargs)
+                if self.policy.debug:
+                    self.echo(f"  >| API response: stop_reason={resp.stop_reason}, blocks={len(resp.content)}, usage={getattr(resp, 'usage', 'N/A')}")
+                    for block in resp.content:
+                        bt = getattr(block, 'type', '?')
+                        if bt == 'text':
+                            self.echo(f"  >| [text] {getattr(block, 'text', '')[:500]}")
+                        elif bt == 'tool_use':
+                            self.echo(f"  >| [tool_use] {block.name}({block.input})")
+                return resp
             except Exception as exc:  # noqa: BLE001
                 error_name = type(exc).__name__
-                error_text = str(exc).lower()
-                is_rate_limit = ("rate" in error_text or "429" in error_text
+                error_text = str(exc)
+                if self.policy.debug:
+                    self.echo(f"  >| API error: {error_name}: {error_text[:400]}")
+                error_lower = error_text.lower()
+                is_rate_limit = ("rate" in error_lower or "429" in error_lower
                                  or "limit" in error_text or "overloaded" in error_text
                                  or error_name == "RateLimitError")
                 if not is_rate_limit:
