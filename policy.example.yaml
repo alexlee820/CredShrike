@@ -107,6 +107,13 @@ policy:
   mask_surrogate_keep_initials: true
   mask_surrogate_min_len: 4
 
+  # --- parallel SMB reads + full-content dump caps -------------------------
+  read_threads: 10                # parallel reads per share (CLI --concurrency)
+  dump_depth: 6                   # directory levels walked
+  dump_per_file_bytes: 16384      # head sent per file in full/full-domain
+  dump_max_files: 500             # files read per share
+  dump_page_chars: 24000          # page target for smb_dump_share
+
   # --- snaffler-style sweep tool (smb_scan_share / --preset snaffler) ------
   scan_depth: 3                   # directory levels below the start path
   scan_max_files: 200             # candidate files opened per sweep

@@ -150,7 +150,7 @@ def _execute_run(state: RunState) -> None:
                 echo=state.push,
                 source_override=lambda: [ComputerRecord(cn=h.split(".")[0], dns_name=h)
                                         for h in host_list],
-                concurrency=int(params.get("concurrency") or 1))
+                concurrency=int(params.get("concurrency") or policy.read_threads))
             done = sum(1 for h in summary["hosts"] if h["status"] == "done")
             state.report = (f"Full scan: {done}/{len(summary['hosts'])} host(s), "
                             f"{len(summary['merged']['credentials'])} credential(s). "
@@ -169,7 +169,7 @@ def _execute_run(state: RunState) -> None:
                 domain_source=params.get("domain_source") or "auto",
                 computers_filter=params.get("computers_filter") or "",
                 max_hosts=int(params["max_hosts"]) if params.get("max_hosts") else None,
-                concurrency=int(params.get("concurrency") or 1),
+                concurrency=int(params.get("concurrency") or policy.read_threads),
                 client_factory=lambda: (_client_factory() if _client_factory
                                         else _build_client(params)),
                 echo=state.push)

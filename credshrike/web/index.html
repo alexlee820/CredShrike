@@ -229,7 +229,7 @@
         <div class="field"><label>Max hosts (full-domain, 0 = all)</label>
           <input id="maxHosts" type="number" placeholder="0"/></div>
         <div class="field"><label>Concurrency (parallel file reads, 1 = sequential)</label>
-          <input id="concurrency" type="number" placeholder="4"/></div>
+          <input id="concurrency" type="number" value="10"/></div>
         <div class="field full"><label>Skip extensions (comma sep; 'none' to read all)</label>
           <input id="skipExts" value=".rar,.7z,.zip,.exe,.msi,.dll,.iso,.vhd,.vhdx,.vmdk,.img,.wim,.mp3,.mp4,.avi,.mkv,.wav,.jpg,.jpeg,.png,.gif,.bmp,.ico,.svg,.doc,.xls,.ppt,.pst,.ost,.ttf,.otf,.woff,.fon,.cab,.msu,.appx,.jar,.war,.db,.sqlite,.mdf,.ndf,.psd,.ai"/></div>
       </div>
@@ -355,7 +355,7 @@ $('startBtn').onclick = async () => {
     context_limit: $('contextLimit').value || 0,
     computers_filter: $('computersFilter').value.trim(),
     max_hosts: $('maxHosts').value || 0,
-    concurrency: $('concurrency').value || 1,
+    concurrency: $('concurrency').value || 10,
     skip_exts: $('skipExts').value || '',
   };
   const r = await fetch('/api/runs', {method:'POST',

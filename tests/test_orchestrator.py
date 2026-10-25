@@ -262,3 +262,17 @@ def test_dump_auto_splits_into_batches(tmp_path, fake_smb):
     # reports from all batches joined into one share report
     assert entry["report_md"].count("#### Batch") == 3
     assert any("batch 1/3" in l for l in lines)
+
+
+def test_domain_sweep_default_threads_come_from_policy(tmp_path, fake_smb):
+    """No explicit concurrency -> policy.read_threads (default 10), not 1."""
+    lines = []
+    policy = Policy()
+    assert policy.read_threads == 10
+    run_domain_sweep(
+        credential=_credential(), policy=policy, audit_dir=str(tmp_path),
+        client_factory=_client_factory_for_hosts({"ws01.corp.local": []}),
+        echo=lines.append,
+        source_override=lambda: [ComputerRecord(cn="WS01", dns_name="ws01.corp.local")],
+        reachable_check=lambda host: True)
+    assert any("PARALLEL FILE READS: 10" in line for line in lines)

@@ -88,7 +88,7 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "dump_page_chars": 24000,           # page target (tool char_cap is 40000)
     "dump_max_files": 500,
     # extensions to SKIP during dump (still listed in the report as "seen but not read")
-    "read_threads": 4,                  # parallel SMB reads (all presets)
+    "read_threads": 10,                 # parallel SMB reads (all presets)
     "dump_skip_exts": [
         ".rar", ".7z", ".zip", ".exe", ".msi", ".dll",           # archives + binaries
         ".iso", ".vhd", ".vhdx", ".vmdk", ".img", ".wim",       # disk/vm images

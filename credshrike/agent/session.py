@@ -101,7 +101,7 @@ class AgentSession:
         self.event_hook = None
         # connection pool for parallel file reads (created lazily per host)
         self._read_pools: dict[str, Queue] = {}
-        self.read_threads = int(getattr(policy, "read_threads", 4))
+        self.read_threads = int(getattr(policy, "read_threads", 10))
 
     def emit(self, kind: str, data: dict) -> None:
         if self.event_hook is not None:

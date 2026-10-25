@@ -379,3 +379,13 @@ def test_ui_has_limit_fields(client):
                 "dumpMaxFiles", "dumpDepth", "maxReadMiB", "maxToolCalls",
                 "wallClock", "maxEntries", "scanMaxFiles", "scanMaxFileKb"):
         assert f'id="{cid}"' in html, cid
+
+
+def test_ui_concurrency_defaults_to_10(client):
+    html = client.get("/").get_data(as_text=True)
+    line = next(l for l in html.splitlines() if 'id="concurrency"' in l)
+    assert 'value="10"' in line
+    from credshrike.config import Policy
+    p = Policy()
+    webapp._apply_policy_overrides(p, {"concurrency": 10})
+    assert p.read_threads == 10

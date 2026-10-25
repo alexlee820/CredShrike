@@ -46,7 +46,7 @@ def _load_policy(args) -> Policy:
         policy.stream = False
     if getattr(args, "context_limit", None):
         policy.context_token_limit = int(args.context_limit)
-    if getattr(args, "concurrency", None):
+    if getattr(args, "concurrency", None) is not None:
         policy.read_threads = int(args.concurrency)
     if getattr(args, "mask_pii", False):
         policy.mask_pii = True
@@ -183,7 +183,7 @@ def cmd_agent(args) -> None:
     # build credential + policy once for ALL presets
     credential = build_credential(args)
     policy = _load_policy(args)
-    concurrency = args.concurrency or 1
+    concurrency = args.concurrency if args.concurrency is not None else policy.read_threads
     preset = _resolve_preset(args)
 
     # config banner for EVERY preset (full-domain, full, snaffler, custom)
@@ -406,10 +406,10 @@ def register(subparsers) -> None:
                         "'(operatingSystem=*Server*)'")
     p.add_argument("--max-hosts", type=int, default=None,
                    help="full-domain: cap the number of computers swept")
-    p.add_argument("--concurrency", type=int, default=1,
-                   help="full-domain: number of hosts swept in parallel "
-                        "(default 1 = sequential; try 3-4 for faster sweeps, "
-                        "mind SMB + API rate limits)")
+    p.add_argument("--concurrency", type=int, default=None,
+                   help="parallel file-read threads per share (default: "
+                        "policy.read_threads = 10; try 3-4 on slow SMB, "
+                        "mind server load)")
     p.add_argument("--skip-exts", default=None,
                    help="comma-separated extensions to SKIP during dump "
                         "(still listed in the report as 'seen but not read'). "

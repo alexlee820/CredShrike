@@ -279,7 +279,7 @@ def _close_pool(pool, original_session):
 
 def _dump_single_share(session, host: str, share_name: str,
                         policy: Policy, echo,
-                        read_threads: int = 4) -> tuple[list[dict], dict, list[str]]:
+                        read_threads: int = 10) -> tuple[list[dict], dict, list[str]]:
     """Dump ONE share: Phase 1 walks directory tree (parallel BFS), Phase 2
     reads all files concurrently (ThreadPool). Both phases share a connection
     pool (one SMB connection per thread — SMB is not thread-safe).
@@ -724,7 +724,7 @@ def merge_findings(all_findings: list[dict]) -> dict:
 
 def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
                     policy: Policy, dc: str, domain_source: str, computers: list,
-                    client_factory, echo, read_threads: int = 1) -> None:
+                    client_factory, echo, read_threads: int = 10) -> None:
     """Sweep ONE host using PER-SHARE context windows. File reads within each
     share use ThreadPoolExecutor (SMB I/O parallelism). LLM analysis is
     sequential (one share at a time — avoids rate-limit storms)."""
@@ -837,7 +837,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
 def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                            domain_source, computers, client_factory, echo,
-                           read_threads=1):
+                           read_threads=10):
     """Sweep one host with transient-error retry. Fills entry fields on
     success; records errors."""
     echo(f"[domain] {host}: START sweep")
@@ -939,12 +939,14 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                      computers_filter: str = "", max_hosts: Optional[int] = None,
                      client_factory: Optional[Callable] = None, echo=print,
                      source_override=None, reachable_check: Optional[Callable] = None,
-                     concurrency: int = 1) -> dict:
+                     concurrency: int = 0) -> dict:
     """Sweep a domain. Hosts are SEQUENTIAL (one at a time — LLM analysis is
     the bottleneck, not host discovery). Within each share, files are read
     in PARALLEL via ThreadPoolExecutor (SMB I/O parallelism). The
     `concurrency` parameter controls file-read threads per share, not
     parallel hosts."""
+    if not concurrency or concurrency < 1:
+        concurrency = int(getattr(policy, "read_threads", 10))
     if reachable_check is None:
         reachable_check = _port_open
     from .audit import AuditLog
