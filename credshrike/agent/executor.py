@@ -70,15 +70,20 @@ class ToolExecutor:
                 self.audit.record(tool_name, raw_args, "error", error=f"{type(exc).__name__}: {exc}",
                                   duration_ms=timer.ms)
                 return {"content": f"ERROR: {type(exc).__name__}: {exc}", "is_error": True}
-        result, redactions = self._redact_result(result)
+        result, redactions, masked = self._sanitize_result(result)
         if redactions:
             self.session.redactions_applied += redactions
+        if masked:
+            self.session.masked_values += masked
         tool = REGISTRY.get(tool_name)
         char_cap = getattr(tool, "char_cap", None) if tool else None
         content, capped = self._render(result, cap=char_cap)
         if redactions:
             # appended AFTER truncation so the note always survives
             content += f"\n[+{redactions} redaction(s) applied per session policy]"
+        if masked:
+            content += (f"\n[+{masked} value(s) replaced with privacy placeholders "
+                        f"per masking policy — they are restored in your output]")
         if self.policy.debug:
             # keep the exact rendered result the model received
             if len(self.session.debug_results) < 300:
@@ -219,37 +224,50 @@ class ToolExecutor:
             text = rx.sub(_sub, text)
         return text, count
 
-    def _redact_result(self, obj: Any) -> tuple[Any, int]:
+    def _sanitize_text(self, text: str) -> tuple[str, int, int]:
+        """Redaction first (operator rules win), then privacy masking.
+        Returns (text, redactions, masked)."""
+        text, redactions = self._redact_text(text)
+        masked = 0
+        if self.session.masker is not None:
+            text, masked = self.session.masker.mask_text(text)
+        return text, redactions, masked
+
+    def _sanitize_result(self, obj: Any) -> tuple[Any, int, int]:
         """Recursively scrub every string in a tool result. File contents
         travel base64-encoded, so ``content_b64`` fields are decoded,
         scrubbed, and re-encoded — plaintext rules still apply to them."""
         if isinstance(obj, dict):
-            out, count = {}, 0
+            out, redactions, masked = {}, 0, 0
             for key, value in obj.items():
                 if key == "content_b64" and isinstance(value, str):
                     try:
                         decoded = base64.b64decode(value).decode("utf-8", errors="replace")
-                        scrubbed, hits = self._redact_text(decoded)
-                        if hits:
-                            out[key] = base64.b64encode(scrubbed.encode("utf-8")).decode("ascii")
-                            count += hits
+                        scrubbed, hits, masked_hits = self._sanitize_text(decoded)
+                        if hits or masked_hits:
+                            out[key] = base64.b64encode(
+                                scrubbed.encode("utf-8")).decode("ascii")
+                            redactions += hits
+                            masked += masked_hits
                             continue
                     except Exception:  # noqa: BLE001 - not b64/text: leave as-is
                         pass
-                new_value, hits = self._redact_result(value)
+                new_value, hits, masked_hits = self._sanitize_result(value)
                 out[key] = new_value
-                count += hits
-            return out, count
+                redactions += hits
+                masked += masked_hits
+            return out, redactions, masked
         if isinstance(obj, list):
-            out, count = [], 0
+            out, redactions, masked = [], 0, 0
             for value in obj:
-                new_value, hits = self._redact_result(value)
+                new_value, hits, masked_hits = self._sanitize_result(value)
                 out.append(new_value)
-                count += hits
-            return out, count
+                redactions += hits
+                masked += masked_hits
+            return out, redactions, masked
         if isinstance(obj, str):
-            return self._redact_text(obj)
-        return obj, 0
+            return self._sanitize_text(obj)
+        return obj, 0, 0
 
     # ------------------------------------------------------------------ #
     def _render(self, result: Any, cap: int | None = None) -> tuple[str, bool]:

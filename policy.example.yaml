@@ -70,6 +70,20 @@ policy:
   #   - '(?i)secret["\s:=]+([A-Za-z0-9_\-]{8,})'
   redact_replacement: "[REDACTED]"
 
+  # --- PasteGuard-style privacy masking (port of sgasser/pasteguard) ------
+  # Detected values become [[TYPE_N]] placeholders on the way to the LLM and
+  # are restored in its output, so the operator's report keeps the evidence
+  # while a third-party/local model never receives the real values.
+  # CLI: --mask-pii / --mask-secrets / --no-mask-restore
+  mask_pii: false                 # emails, IPs, phones, cards, IBANs, EU VAT
+  mask_secrets: false             # API keys, JWTs, bearer, private keys, passwords, DSNs
+  mask_restore: true              # put originals back in the model's output
+  mask_show_markers: false        # prefix restored values with mask_marker_text
+  mask_marker_text: "[protected]"
+  mask_max_scan_chars: 200000     # chunk size; the WHOLE text is scanned
+  mask_allowlist: []              # never mask: [{pattern: "Company Inc."}]
+  mask_denylist: []               # always mask: [{pattern: 'CUST-\d{6}', type: CUSTOMER_ID, regex: true}]
+
   # --- snaffler-style sweep tool (smb_scan_share / --preset snaffler) ------
   scan_depth: 3                   # directory levels below the start path
   scan_max_files: 200             # candidate files opened per sweep

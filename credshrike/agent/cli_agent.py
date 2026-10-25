@@ -44,6 +44,12 @@ def _load_policy(args) -> Policy:
         policy.context_token_limit = int(args.context_limit)
     if getattr(args, "concurrency", None):
         policy.read_threads = int(args.concurrency)
+    if getattr(args, "mask_pii", False):
+        policy.mask_pii = True
+    if getattr(args, "mask_secrets", False):
+        policy.mask_secrets = True
+    if getattr(args, "no_mask_restore", False):
+        policy.mask_restore = False
     if getattr(args, "skip_exts", None) is not None:
         raw = args.skip_exts.strip().lower()
         if raw == "none" or raw == "":
@@ -100,9 +106,13 @@ def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> s
     """Generate the standalone HTML report next to the audit log."""
     from pathlib import Path
     from .findings import extract_findings
+    from ..masking import restore_findings
     findings, extraction_error = [], ""
     try:
         findings = extract_findings(client, policy, loop.messages)
+        # findings were parsed from a MASKED conversation — put values back
+        # (unless the operator asked for placeholders to stay everywhere)
+        restore_findings(findings, session.masker if policy.mask_restore else None)
     except Exception as exc:  # noqa: BLE001 - report must still build
         extraction_error = f"{type(exc).__name__}: {exc}"
     from ..report import write_report
@@ -323,6 +333,18 @@ def register(subparsers) -> None:
     p.add_argument("--redact-pattern", action="append", default=None,
                    help="regex redaction rule (repeatable). With a capture group "
                         "only the group is masked: --redact-pattern 'password\\\\s*=\\\\s*(\\\\S+)'")
+    p.add_argument("--mask-pii", action="store_true",
+                   help="PasteGuard-style masking of PII (emails, IPs, phone "
+                        "numbers, credit cards, IBANs, EU VAT) before content "
+                        "reaches the LLM provider")
+    p.add_argument("--mask-secrets", action="store_true",
+                   help="mask secrets (API keys, JWTs, bearer tokens, private "
+                        "keys, passwords, connection strings) before content "
+                        "reaches the LLM provider; values are restored in the "
+                        "model's output so the report still carries evidence")
+    p.add_argument("--no-mask-restore", action="store_true",
+                   help="leave [[TYPE_N]] placeholders in the output instead of "
+                        "restoring the original values (maximum privacy)")
     p.add_argument("--scan-patterns", default=None,
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")

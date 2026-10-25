@@ -82,6 +82,11 @@ class AgentSession:
         # total redaction hits scrubbed from tool results before they reached
         # the LLM (harness-side counter for /budget)
         self.redactions_applied = 0
+        # PasteGuard-style privacy masking: None when disabled. One Masker per
+        # session = one placeholder namespace per context window.
+        from ..masking import Masker
+        self.masker = Masker.from_policy(policy)
+        self.masked_values = 0
         # full results of every smb_scan_share sweep (for the HTML report)
         self.scan_results: list[dict] = []
         # domain computer inventory (domain_list_computers results, deduped)
@@ -172,8 +177,10 @@ class AgentSession:
         return self._dir_sources[key]
 
     # -- lifecycle --------------------------------------------------------- #
-    def close(self) -> None:
-        # close read pools (but not the shared cached sessions)
+    def close_smb(self) -> None:
+        """Close SMB read pools + cached sessions. Does NOT touch the audit
+        log — safe for short-lived per-share/per-batch sessions that share
+        the run's single audit writer."""
         for pool in self._read_pools.values():
             while True:
                 try:
@@ -191,6 +198,9 @@ class AgentSession:
             except Exception:  # noqa: BLE001
                 pass
         self._smb_cache.clear()
+
+    def close(self) -> None:
+        self.close_smb()
         for source in self._dir_sources.values():
             closer = getattr(source, "close", None)
             if closer:

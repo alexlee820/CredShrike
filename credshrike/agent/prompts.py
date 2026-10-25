@@ -33,7 +33,8 @@ They can only read and inspect. Nothing you can say or do makes writes, deletes,
 5. Reading files — match the task's breadth: for "review/read EVERYTHING" tasks use smb_dump_share (all formats, paged — follow next_skip until null); for targeted questions use smb_scan_share (regex triage) or single smb_read_file calls. Page into long files with offset; smb_stat before deep reads.
 6. Flagged files: a read may return {{"flagged": true}} instead of content when the session's read gate applies (token or size limit). Never retry that read. Collect every flagged file and list it in your final report (Findings or Limitations) as "flagged, not read", including its size and reason.
 7. Redaction: some values in tool results may appear as [REDACTED] — the session's redaction policy masked them before they reached you. Never guess or attempt to recover redacted values. Report "secret present (redacted)" with the location, not the value.
-8. Unknown SIDs in ACEs: resolve them with sid_lookup before naming a trustee in a finding.
+8. Privacy placeholders: values shaped like [[EMAIL_ADDRESS_1]], [[API_KEY_AWS_2]] or [[ENV_PASSWORD_1]] are REAL values that the harness masked on their way to you. Treat each placeholder as the value itself: report it verbatim in the same position (a username/password pair may be "svc" / "[[ENV_PASSWORD_1]]"). Do NOT call them redacted, do NOT invent replacements, and NEVER alter the placeholder text (no spacing/case changes) — the harness restores the originals only on an exact match.
+9. Unknown SIDs in ACEs: resolve them with sid_lookup before naming a trustee in a finding.
 
 # Output
 While working, narrate briefly (one line per step: what you call and why). When done, produce a markdown report: Findings (each with evidence), Scope covered, and Limitations (what you could not verify and why). Answer in the language the user used."""

@@ -170,8 +170,41 @@ credshrike domain computers --dc DC01 --source adws --user u --domain d --passwo
 | **Budgets** | Per-run limits (100 tool calls, 10 MiB read, 30 min wall clock) |
 | **Read gate** | `--read-gate size` flags oversize files instead of reading them |
 | **Redaction** | `--redact 'codename,IP'` masks values BEFORE they reach the LLM |
+| **PII/secrets masking** | `--mask-pii --mask-secrets` — PasteGuard-style placeholders, restored in the report |
 | **Audit** | JSONL log of every tool call (redacted args, verdicts, timing) |
 | **Context mgmt** | Auto-compaction at 75% of context window; overflow self-heal |
+
+---
+
+## Privacy Masking (PasteGuard-style)
+
+A Python port of the `mask` half of
+[sgasser/pasteguard](https://github.com/sgasser/pasteguard) sits on the LLM
+boundary: detected PII and secrets are replaced with `[[TYPE_N]]` placeholders
+before content reaches the provider, then restored in the model's output — so
+the harness still produces a report with the real evidence, but a cloud or
+local model never receives the values.
+
+```bash
+credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
+  --mask-pii --mask-secrets
+```
+
+| Group | Detected (deterministic check where the format allows) |
+|-------|--------------------------------------------------------|
+| PII | emails, IPv4/IPv6, phone numbers, credit cards (Luhn), IBANs (mod-97), EU VAT |
+| Secrets | API keys (`sk-…`, AWS `AKIA…`, GitHub `ghp_…`), JWTs, bearer tokens, PEM/OpenSSH private keys, `*PASSWORD`/`*_SECRET` assignments, DB connection strings |
+
+- Identical values share one placeholder (`[[EMAIL_ADDRESS_1]]`), so the model
+  can still correlate occurrences.
+- Only the value is masked for assignments (`DB_PASSWORD=[[ENV_PASSWORD_1]]`),
+  keeping context for the model's analysis.
+- `--no-mask-restore` leaves placeholders in the output (maximum privacy).
+- `mask_allowlist` / `mask_denylist` in the policy file handle names, codenames
+  and company-specific IDs (PasteGuard's GLiNER semantic backend is *not*
+  ported — it needs a model download).
+- Masking applies to every content path: share dumps in `full`/`full-domain`,
+  and tool results for custom goals and `snaffler`.
 
 ---
 

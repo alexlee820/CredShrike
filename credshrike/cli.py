@@ -144,6 +144,68 @@ def cmd_smb_permissions(args) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# standalone mask / restore (PasteGuard-style, no LLM or SMB involved)
+# --------------------------------------------------------------------------- #
+def cmd_mask(args) -> None:
+    """Mask (or --restore) free text from a file/stdin.
+
+    Useful on its own before pasting logs, configs or ticket dumps into an AI
+    chat — the same detector the agent uses on the LLM boundary.
+    """
+    from .masking import Masker
+
+    if args.file and args.file != "-":
+        text = open(args.file, "r", encoding="utf-8", errors="replace").read()
+    else:
+        text = sys.stdin.read()
+
+    if args.restore:
+        from .masking import MaskContext
+        mapping = json.load(open(args.restore, "r", encoding="utf-8"))
+        sys.stdout.write(MaskContext.from_mapping(mapping).restore(text))
+        return
+
+    pii, secrets = bool(args.pii), bool(args.secrets)
+    if not pii and not secrets:      # the command's whole purpose
+        pii = secrets = True
+    allow = [{"pattern": p} for p in (args.allow or [])]
+    deny = [{"pattern": p, "regex": not args.deny_literal, "type": "DENYLIST"}
+            for p in (args.deny or [])]
+    masker = Masker(pii=pii, secrets=secrets, allowlist=allow, denylist=deny)
+    masked, hits = masker.mask_text(text)
+    sys.stdout.write(masked)
+    if args.mapping:
+        with open(args.mapping, "w", encoding="utf-8") as fh:
+            json.dump(masker.context.mapping, fh, indent=2, ensure_ascii=False)
+        print(f"\n[mask] {hits} value(s) masked; mapping saved to {args.mapping} "
+              f"(restore with: credshrike mask --restore {args.mapping})",
+              file=sys.stderr)
+
+
+def _register_mask(subparsers) -> None:
+    p = subparsers.add_parser(
+        "mask", help="mask PII/secrets in text (PasteGuard-style; no LLM, no SMB)")
+    p.add_argument("file", nargs="?", default="-",
+                   help="file to mask (default: stdin)")
+    p.add_argument("--pii", action="store_true",
+                   help="mask emails, IPs, phones, cards, IBANs, VAT (default: on)")
+    p.add_argument("--secrets", action="store_true",
+                   help="mask API keys, JWTs, private keys, passwords, DSNs "
+                        "(default: on)")
+    p.add_argument("--allow", action="append", metavar="PATTERN",
+                   help="never mask this literal (repeatable)")
+    p.add_argument("--deny", action="append", metavar="PATTERN",
+                   help="always mask this pattern (repeatable)")
+    p.add_argument("--deny-literal", action="store_true",
+                   help="treat --deny patterns as literals instead of regexes")
+    p.add_argument("--mapping", metavar="PATH",
+                   help="save the placeholder→value map as JSON (enables restore)")
+    p.add_argument("--restore", metavar="MAPPING_JSON",
+                   help="restore a masked text using a saved mapping")
+    p.set_defaults(func=cmd_mask)
+
+
+# --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
@@ -190,6 +252,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--path", default="", help="omit for share-level ACL")
     p.add_argument("--probe", action="store_true", help="run effective-access open probes")
     p.set_defaults(func=cmd_smb_permissions)
+
+    _register_mask(subs)
 
     # --- domain (Phase 2) / agent (Phase 3) parsers are registered by their
     # modules importing build_parser hooks; kept here so --help is stable. #

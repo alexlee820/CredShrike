@@ -149,6 +149,21 @@
         <label style="margin:0" for="debugMode">Debug — show FULL tool results
           (verify adws/ldap via "source", inspect dump pages)</label>
       </div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="maskPii" style="width:auto"/>
+        <label style="margin:0" for="maskPii">Mask PII before sending to the LLM
+          — emails, IPs, phones, cards, IBANs, VAT → <code>[[TYPE_N]]</code></label>
+      </div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="maskSecrets" style="width:auto"/>
+        <label style="margin:0" for="maskSecrets">Mask secrets before sending to the LLM
+          — API keys, JWTs, private keys, passwords (restored in the report)</label>
+      </div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="noMaskRestore" style="width:auto"/>
+        <label style="margin:0" for="noMaskRestore">Do NOT restore masked values in the
+          output (maximum privacy — placeholders stay in the report)</label>
+      </div>
     </div>
 
     <div id="authFields">
@@ -259,6 +274,9 @@ $('startBtn').onclick = async () => {
     api_base_url: $('apiBaseUrl').value.trim(),
     api_key: $('apiKey').value.trim(),
     debug: $('debugMode').checked,
+    mask_pii: $('maskPii').checked,
+    mask_secrets: $('maskSecrets').checked,
+    no_mask_restore: $('noMaskRestore').checked,
     context_limit: $('contextLimit').value || 0,
     computers_filter: $('computersFilter').value.trim(),
     max_hosts: $('maxHosts').value || 0,

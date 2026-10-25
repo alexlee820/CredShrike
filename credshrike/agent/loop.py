@@ -112,12 +112,22 @@ class AgentLoop:
         return self._executor
 
     # ------------------------------------------------------------------ #
-    def run(self, goal: str) -> str:
+    def run(self, goal: str, restore: bool = True) -> str:
         """Pursue one goal to completion; returns the final assistant text.
-        Conversation state persists across calls (REPL follow-ups)."""
+        Conversation state persists across calls (REPL follow-ups).
+
+        ``restore``: put privacy-masked values (``[[TYPE_N]]``) back into the
+        returned text. The share/batch orchestrator passes False because it
+        needs the masked text for follow-up LLM calls and restores separately."""
         self.messages.append({"role": "user", "content": goal})
         self.transcript.append({"kind": "goal", "text": goal})
         self._output_parts = []   # reset per goal
+
+        def _final(text: str) -> str:
+            if restore and self.session.masker is not None and self.policy.mask_restore:
+                return self.session.masker.restore(text)
+            return text
+
         while True:
             if self.stop_requested:
                 self.echo("[stopped] interrupted by user — returning partial state")
@@ -189,8 +199,8 @@ class AgentLoop:
                 full_text = "\n".join(self._output_parts) + "\n" + text
                 self.echo(f"[output] assembled from {len(self._output_parts) + 1} "
                           f"continuation(s), {len(full_text)} chars total")
-                return full_text
-            return text
+                return _final(full_text)
+            return _final(text)
 
     # ------------------------------------------------------------------ #
     def _run_tool_uses(self, response) -> list[dict]:

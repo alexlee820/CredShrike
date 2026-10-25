@@ -223,9 +223,11 @@ def _emit_report(loop, session, policy, audit, client, report_md: str) -> str:
     """Build the standalone HTML report next to this run's audit log."""
     from pathlib import Path
     from .agent.findings import extract_findings
+    from .masking import restore_findings
     findings, extraction_error = [], ""
     try:
         findings = extract_findings(client, policy, loop.messages)
+        restore_findings(findings, session.masker if policy.mask_restore else None)
     except Exception as exc:  # noqa: BLE001 - report must still build
         extraction_error = f"{type(exc).__name__}: {exc}"
     from .report import write_report
@@ -307,6 +309,12 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.thinking_mode = "off"
     if params.get("debug"):
         policy.debug = True
+    if "mask_pii" in params:
+        policy.mask_pii = bool(params["mask_pii"])
+    if "mask_secrets" in params:
+        policy.mask_secrets = bool(params["mask_secrets"])
+    if params.get("no_mask_restore"):
+        policy.mask_restore = False
     if params.get("skip_exts"):
         raw = str(params["skip_exts"]).strip().lower()
         if raw == "none":

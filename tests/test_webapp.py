@@ -159,16 +159,15 @@ def test_index_served(client):
 # --------------------------------------------------------------------------- #
 # custom Anthropic-compatible endpoints (GLM / DeepSeek)
 # --------------------------------------------------------------------------- #
-def test_build_client_routes_to_custom_endpoint():
+def test_build_client_routes_to_custom_endpoint(monkeypatch):
+    # explicit override beats any ANTHROPIC_BASE_URL the environment carries
+    # (e.g. a GLM/z.ai endpoint configured for Claude Code) — set it ourselves
+    # instead of depending on whatever the developer's shell has exported
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://ambient.example/anthropic")
     client = webapp._build_client({"api_base_url": "https://api.deepseek.com/anthropic",
                                    "api_key": "sk-test"})
     assert "deepseek" in str(client.base_url)
     assert client.api_key == "sk-test"
-    # explicit override beats any ANTHROPIC_BASE_URL the environment carries
-    # (e.g. a GLM/z.ai endpoint configured for Claude Code)
-    import os
-    if os.environ.get("ANTHROPIC_BASE_URL"):
-        assert "deepseek" not in os.environ["ANTHROPIC_BASE_URL"]
 
 
 def test_loop_omits_thinking_when_off():

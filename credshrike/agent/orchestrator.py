@@ -480,7 +480,13 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
              f"context budget {max_chars // 1000}K — auto-split into "
              f"{len(batches)} request(s) ({[len(b) for b in batches]} files)")
 
+    masked_total = 0
     for i, batch in enumerate(batches, 1):
+        # one fresh session per batch = one placeholder namespace per request
+        share_session = AgentSession(credential, policy, audit, hosts=[host],
+                                     dc=dc, domain_source=domain_source)
+        masker = share_session.masker
+
         batch_note = (f"\nBATCH {i} OF {len(batches)}: this request contains "
                       f"{len(batch)} of the share's {len(file_entries)} files. "
                       f"Other batches are analyzed in separate requests — your "
@@ -491,8 +497,14 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
             memory_parts.append(f"MEMORY from previous shares on {host}:\n{memory}")
         if batch_memory:
             memory_parts.append(f"MEMORY from previous batches of THIS share:\n{batch_memory}")
-        memory_block = (f"\n{batch_note}\n" + "\n\n".join(memory_parts) + "\n\n"
-                        if memory_parts or batch_note else "")
+        injected_memory = "\n\n".join(memory_parts)
+        if masker is not None and injected_memory:
+            # raw memory (restored cross-context values) is re-masked with
+            # THIS context's placeholders before it leaves for the model
+            injected_memory, hits = masker.mask_text(injected_memory)
+            masked_total += hits
+        memory_block = (f"\n{batch_note}\n" + injected_memory + "\n\n"
+                        if injected_memory or batch_note else "")
         batch_chars = sum(len(_render_entry_text(e)) for e in batch)
 
         goal = _SHARE_ANALYSIS_PROMPT.format(
@@ -500,38 +512,45 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
             n_files=len(batch), size_kb=batch_chars // 1024,
             memory_block=memory_block, incomplete="")
         dump_text = _render_dump_text(batch, share_name)
+        if masker is not None:
+            dump_text, hits = masker.mask_text(dump_text)
+            masked_total += hits
 
-        share_session = AgentSession(credential, policy, audit, hosts=[host],
-                                     dc=dc, domain_source=domain_source)
         loop = AgentLoop(client_factory(), share_session, policy, audit, echo=echo)
         echo(f"[share] {host}/{share_name}: analyzing batch {i}/{len(batches)} "
-             f"({len(batch)} file(s), {batch_chars // 1000}K)...")
-        report = loop.run(goal + "\n\n" + dump_text)
-        if len(batches) > 1:
-            report = f"#### Batch {i}/{len(batches)}\n{report}"
-        reports.append(report)
+             f"({len(batch)} file(s), {batch_chars // 1000}K"
+             + (f", {masked_total} value(s) masked)" if masker is not None else ")"))
+        # restore=False: the LLM-facing report stays masked for the corrective
+        # round + rolling summary; the operator's copy is restored at the end
+        try:
+            raw_report = loop.run(goal + "\n\n" + dump_text, restore=False)
+        finally:
+            share_session.close_smb()   # release this batch's SMB connections
 
         # checklist verification for THIS batch (it saw only these files)
         batch_paths = [e["path"] for e in batch]
         if batch_paths:
-            missing = _verify_file_checklist(report, batch_paths)
+            missing = _verify_file_checklist(raw_report, batch_paths)
             if missing:
                 echo(f"[checklist] {host}/{share_name} batch {i}/{len(batches)}: "
                      f"{len(missing)}/{len(batch_paths)} file(s) not accounted "
                      f"for — sending corrective round")
                 corrective = _corrective_checklist_round(
-                    client_factory(), policy, share_name, missing, report, echo)
+                    client_factory(), policy, share_name, missing, raw_report, echo)
                 if corrective:
-                    report += "\n" + corrective
-                    reports[-1] = report
+                    raw_report += "\n" + corrective
             else:
                 echo(f"[checklist] {host}/{share_name} batch {i}/{len(batches)}: "
                      f"all {len(batch_paths)} file(s) accounted for ✓")
 
-        # findings extraction per batch (double-pass union happens inside)
+        # findings extraction per batch (double-pass union happens inside);
+        # extracted from the MASKED conversation, then restored in code
         try:
             batch_findings = extract_findings(client_factory(), policy,
                                               loop.messages)
+            if masker is not None and policy.mask_restore:
+                from ..masking import restore_findings
+                restore_findings(batch_findings, masker)
             for f in batch_findings:
                 f["host"] = host
                 f["share"] = share_name
@@ -542,13 +561,24 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
             echo(f"[share] {host}/{share_name} batch {i}/{len(batches)}: "
                  f"extraction failed — {exc}")
 
-        # rolling summary: carries THIS batch's findings to the next batch
+        # operator-facing report: originals back in place
+        report = masker.restore(raw_report) if (masker is not None
+                                                and policy.mask_restore) else raw_report
+        if len(batches) > 1:
+            report = f"#### Batch {i}/{len(batches)}\n{report}"
+        reports.append(report)
+
+        # rolling summary: carries THIS batch's findings to the next batch.
+        # Generated from the MASKED report (what the model actually saw),
+        # then restored — the next context re-masks it with its own namespace.
         if len(batches) > 1:
             batch_memory = _generate_share_summary(
-                client_factory(), policy, share_name, report, echo)
+                client_factory(), policy, share_name, raw_report, echo)
+            if masker is not None and policy.mask_restore:
+                batch_memory = masker.restore(batch_memory)
 
     return {"report": "\n\n".join(reports), "findings": findings,
-            "memory": batch_memory or memory}
+            "memory": batch_memory or memory, "masked": masked_total}
 
 
 def _parse_checklist_paths(report_md: str) -> set[str]:
@@ -706,6 +736,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         all_reports: list[str] = []
         all_skipped: list[dict] = []    # files seen but not read (ext filter)
         memory = ""    # rolling summary from previous shares
+        masked_total = 0
         total_dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
                             "bytes_read": 0, "errors": 0}
 
@@ -733,6 +764,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                 memory=memory)
             share_report = result["report"]
             memory = result["memory"]
+            masked_total += int(result.get("masked", 0))
 
             all_reports.append(f"### {share_name}\n{share_report}")
             all_skipped.extend(skipped_ext)
@@ -767,6 +799,10 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
                      skipped_files=all_skipped)
         entry["html"] = os.path.basename(html_path)
         entry["status"] = "done"
+        entry["masked"] = masked_total
+        if masked_total:
+            echo(f"[mask] {host}: {masked_total} sensitive value(s) replaced with "
+                 f"placeholders before leaving for the LLM (restored in the report)")
         echo(f"[domain] {host}: done — {len(all_findings)} finding(s) across "
              f"{len(dumpable)} share(s), report {entry['html']}")
         echo(f"[domain] {host}: done — {len(entry['findings'])} finding(s), "
@@ -835,6 +871,8 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
         f"--context-limit {policy.context_token_limit}" if policy.context_token_limit else "",
         f"--read-gate {policy.read_gate}" if policy.read_gate != "none" else "",
         f"--redact '{','.join(policy.redact_literals)}'" if policy.redact_literals else "",
+        "--mask-pii" if policy.mask_pii else "",
+        "--mask-secrets" if policy.mask_secrets else "",
         f"--skip-exts '{','.join(policy.dump_skip_exts[:6])}...'" if policy.dump_skip_exts else "",
         "--debug" if policy.debug else "",
     ]
@@ -851,6 +889,11 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     echo(f" Skip exts  : {len(policy.dump_skip_exts)} types" +
          (f" ({', '.join(policy.dump_skip_exts[:5])}...)" if policy.dump_skip_exts else " (none)"))
     echo(f" Read gate  : {policy.read_gate}")
+    mask_types = [t for t, on in (("PII", policy.mask_pii),
+                                  ("secrets", policy.mask_secrets)) if on]
+    echo(f" Masking    : {', '.join(mask_types) if mask_types else 'off'}" +
+         (f" → [[TYPE_N]] placeholders, {'restored' if policy.mask_restore else 'NOT restored'} in output"
+          if mask_types else ""))
     echo(f" Context    : {policy.context_token_limit or 'off'}" +
          (f" (compact at {int(policy.compact_at_ratio * 100)}%)" if policy.context_token_limit else ""))
     echo(f" Budget     : {policy.max_tool_calls} calls / {policy.max_total_read_bytes // 1048576} MiB / {policy.wall_clock_seconds}s")

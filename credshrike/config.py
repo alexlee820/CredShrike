@@ -39,6 +39,20 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "redact_patterns": [],              # regexes; with a capture group only the group
                                         # is masked: 'password\s*=\s*(\S+)' keeps the key
     "redact_replacement": "[REDACTED]",
+    # --- PasteGuard-style privacy masking (see credshrike/masking.py) ------
+    # Detected PII/secrets become [[TYPE_N]] placeholders on the way to the
+    # LLM and are restored in its output (mask_restore) — a compromised or
+    # third-party model never receives the real values.
+    "mask_pii": False,                  # emails, IPs, cards, IBANs, VAT, phones
+    "mask_secrets": False,              # API keys, JWTs, private keys, passwords, DSNs
+    "mask_restore": True,               # put originals back in the model's output
+    "mask_show_markers": False,         # prefix restored values with mask_marker_text
+    "mask_marker_text": "[protected]",
+    "mask_max_scan_chars": 200_000,     # per-pass chunk size (the WHOLE text is scanned)
+    "mask_allowlist": [],               # strings/regexes never masked:
+                                        # [{"pattern": "Company Inc.", "regex": false}]
+    "mask_denylist": [],                # always masked, custom type:
+                                        # [{"pattern": "CUST-\\d{6}", "type": "CUSTOMER_ID", "regex": true}]
     # --- snaffler-style scan tool (smb_scan_share) --------------------------
     "scan_depth": 3,
     "scan_max_files": 200,              # candidates opened per sweep
@@ -100,6 +114,14 @@ class Policy:
     redact_literals: list[str] = field(default_factory=list)
     redact_patterns: list[str] = field(default_factory=list)
     redact_replacement: str = DEFAULT_POLICY_DICT["redact_replacement"]
+    mask_pii: bool = DEFAULT_POLICY_DICT["mask_pii"]
+    mask_secrets: bool = DEFAULT_POLICY_DICT["mask_secrets"]
+    mask_restore: bool = DEFAULT_POLICY_DICT["mask_restore"]
+    mask_show_markers: bool = DEFAULT_POLICY_DICT["mask_show_markers"]
+    mask_marker_text: str = DEFAULT_POLICY_DICT["mask_marker_text"]
+    mask_max_scan_chars: int = DEFAULT_POLICY_DICT["mask_max_scan_chars"]
+    mask_allowlist: list = field(default_factory=list)
+    mask_denylist: list = field(default_factory=list)
     scan_depth: int = DEFAULT_POLICY_DICT["scan_depth"]
     scan_max_files: int = DEFAULT_POLICY_DICT["scan_max_files"]
     scan_max_file_bytes: int = DEFAULT_POLICY_DICT["scan_max_file_bytes"]
