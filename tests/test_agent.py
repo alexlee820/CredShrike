@@ -608,3 +608,76 @@ def test_output_truncation_auto_continues(session):
     cont_msgs = [m for m in loop.messages if m["role"] == "user"
                  and "cut off" in str(m.get("content", ""))]
     assert len(cont_msgs) == 2    # two continuation rounds
+
+
+# --------------------------------------------------------------------------- #
+# streaming (SSE): same final message, live echo, automatic fallback
+# --------------------------------------------------------------------------- #
+class FakeStream:
+    def __init__(self, final, chunks, fail_at=None):
+        self.final = final
+        self.chunks = list(chunks)
+        self.fail_at = fail_at
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    @property
+    def text_stream(self):
+        for i, chunk in enumerate(self.chunks):
+            if self.fail_at is not None and i >= self.fail_at:
+                raise RuntimeError("stream died")
+            yield chunk
+
+    def get_final_message(self):
+        return self.final
+
+
+def test_streaming_uses_final_message_and_echoes(session):
+    final = SimpleNamespace(
+        stop_reason="end_turn", content=[_text("streamed answer")],
+        usage=SimpleNamespace(input_tokens=7))
+
+    class Msgs:
+        def stream(self, **kw):
+            assert kw["messages"], "streaming must carry the conversation"
+            return FakeStream(final, ["streamed ", "answer\n"])
+
+        def create(self, **kw):
+            raise AssertionError("must use streaming when enabled")
+
+    lines = []
+    from credshrike.agent.loop import AgentLoop
+    loop = AgentLoop(SimpleNamespace(messages=Msgs()), session,
+                     session.policy, session.audit, echo=lines.append)
+    assert loop.policy.stream is True
+    assert loop.run("hi") == "streamed answer"
+    assert any("✎" in line for line in lines)          # live token echo
+    assert loop.transcript[-1]["text"] == "streamed answer"
+
+
+def test_streaming_falls_back_when_endpoint_rejects(session):
+    final = SimpleNamespace(stop_reason="end_turn", content=[_text("plain ok")])
+
+    class Msgs:
+        def __init__(self):
+            self.created = False
+
+        def stream(self, **kw):
+            raise RuntimeError("streaming not supported by this endpoint")
+
+        def create(self, **kw):
+            self.created = True
+            return final
+
+    msgs = Msgs()
+    lines = []
+    from credshrike.agent.loop import AgentLoop
+    loop = AgentLoop(SimpleNamespace(messages=msgs), session,
+                     session.policy, session.audit, echo=lines.append)
+    assert loop.run("hi") == "plain ok"
+    assert msgs.created and loop._stream_ok is False
+    assert any("falling back" in line for line in lines)

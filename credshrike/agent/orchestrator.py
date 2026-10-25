@@ -899,6 +899,7 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     echo(f" Context    : {policy.context_token_limit or 'off'}" +
          (f" (compact at {int(policy.compact_at_ratio * 100)}%)" if policy.context_token_limit else ""))
     echo(f" Budget     : {policy.max_tool_calls} calls / {policy.max_total_read_bytes // 1048576} MiB / {policy.wall_clock_seconds}s")
+    echo(f" Streaming  : {'SSE (live output, auto-fallback)' if policy.stream else 'off'}")
     echo(f" Debug      : {'ON' if policy.debug else 'off'}")
     echo(sep)
     echo(" Equivalent CLI command:")

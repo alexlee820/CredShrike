@@ -40,6 +40,10 @@ def _load_policy(args) -> Policy:
         policy.debug = True
         import logging
         logging.getLogger("CredShrike").setLevel(logging.DEBUG)
+    if getattr(args, "stream", False):
+        policy.stream = True
+    if getattr(args, "no_stream", False):
+        policy.stream = False
     if getattr(args, "context_limit", None):
         policy.context_token_limit = int(args.context_limit)
     if getattr(args, "concurrency", None):
@@ -395,6 +399,12 @@ def register(subparsers) -> None:
                    help="start the interactive REPL even with no --goal/--preset "
                         "(bare `credshrike agent` otherwise defaults to a "
                         "full-domain sweep)")
+    p.add_argument("--stream", action="store_true", default=None,
+                   help="stream tokens live (SSE). On by default; use this to "
+                        "re-enable after a policy file disabled it")
+    p.add_argument("--no-stream", action="store_true",
+                   help="plain request/response (no SSE) — use if your "
+                        "Anthropic-compatible endpoint rejects streaming")
     p.add_argument("--debug", action="store_true",
                    help="debug mode: echo the FULL tool results (exactly what the "
                         "model received — verify transports like adws via the "

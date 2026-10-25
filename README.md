@@ -181,6 +181,7 @@ credshrike domain computers --dc DC01 --source adws --user u --domain d --passwo
 | **PII/secrets masking** | `--mask-pii --mask-secrets` — PasteGuard-style placeholders, restored in the report |
 | **Audit** | JSONL log of every tool call (redacted args, verdicts, timing) |
 | **Context mgmt** | Auto-compaction at 75% of context window; overflow self-heal |
+| **Streaming** | SSE token stream (live output, same result/cost); auto-fallback if the endpoint rejects it |
 
 ---
 

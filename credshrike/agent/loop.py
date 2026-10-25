@@ -53,6 +53,9 @@ class AgentLoop:
         # output truncation auto-continuation
         self._output_parts: list[str] = []   # accumulated text from truncated turns
         self._max_continuations = 3          # max "continue" rounds per goal
+        # streaming (SSE): live token echo; disabled automatically if the
+        # endpoint or client does not support it
+        self._stream_ok = bool(getattr(policy, "stream", False))
 
     # ------------------------------------------------------------------ #
     # context-window management
@@ -233,6 +236,58 @@ class AgentLoop:
     # max retries on rate-limit (429) with exponential backoff
     RATE_LIMIT_RETRIES = 5
     RATE_LIMIT_BASE_WAIT = 2   # seconds; doubles each retry
+    STREAM_ECHO_CHARS = 200    # flush a live line at newline or this many chars
+
+    def _stream_create(self, kwargs):
+        """One streaming (SSE) request. Returns the FINAL message — the same
+        object shape as ``messages.create`` — so every downstream decision
+        (tool_use inputs, stop_reason, usage, compaction) is unchanged.
+
+        Falls back to a plain request when the client/endpoint has no SSE
+        support; that only happens before any text was echoed, so a fallback
+        can never duplicate visible output."""
+        api = self.client.messages
+        factory = getattr(api, "stream", None)
+        if factory is None:
+            self._stream_ok = False
+            return api.create(**kwargs)
+
+        pending = ""
+        emitted_any = False
+        try:
+            with factory(**kwargs) as stream:
+                for delta in stream.text_stream:
+                    if not delta:
+                        continue
+                    pending += delta
+                    if "\n" in pending or len(pending) >= self.STREAM_ECHO_CHARS:
+                        self.echo(f"  ✎ {pending.strip()}")
+                        pending = ""
+                        emitted_any = True
+                if pending:
+                    self.echo(f"  ✎ {pending.strip()}")
+                    emitted_any = True
+                return stream.get_final_message()
+        except Exception as exc:  # noqa: BLE001
+            # Only treat it as "this endpoint has no SSE" when nothing was
+            # echoed AND the error looks like an unsupported-feature response.
+            # Rate limits / network errors must reach the retry logic below
+            # with streaming left enabled.
+            if emitted_any or not self._is_stream_unsupported(exc):
+                raise
+            self._stream_ok = False
+            self.echo(f"  ! streaming unavailable ({type(exc).__name__}: "
+                      f"{str(exc)[:80]}) — falling back to non-streaming")
+            return api.create(**kwargs)
+
+    @staticmethod
+    def _is_stream_unsupported(exc: Exception) -> bool:
+        status = getattr(exc, "status_code", None)
+        if status in (400, 404, 405, 406, 415, 501):
+            return True
+        text = str(exc).lower()
+        return any(key in text for key in
+                   ("stream", "sse", "not supported", "unsupported"))
 
     def _create(self):
         kwargs = dict(
@@ -250,7 +305,8 @@ class AgentLoop:
         last_error = None
         for attempt in range(self.RATE_LIMIT_RETRIES):
             try:
-                resp = self.client.messages.create(**kwargs)
+                resp = (self._stream_create(kwargs) if self._stream_ok
+                        else self.client.messages.create(**kwargs))
                 if self.policy.debug:
                     self.echo(f"  >| API response: stop_reason={resp.stop_reason}, blocks={len(resp.content)}, usage={getattr(resp, 'usage', 'N/A')}")
                     for block in resp.content:

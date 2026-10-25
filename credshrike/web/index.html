@@ -145,6 +145,11 @@
       <div class="field"><label>API key (optional — else ANTHROPIC_API_KEY)</label>
         <input id="apiKey" type="password" placeholder="sk-..."/></div>
       <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="streamMode" style="width:auto" checked/>
+        <label style="margin:0" for="streamMode">Stream tokens (SSE) — live output;
+          auto-fallback to a plain request if the endpoint rejects it</label>
+      </div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
         <input type="checkbox" id="debugMode" style="width:auto"/>
         <label style="margin:0" for="debugMode">Debug — show FULL tool results
           (verify adws/ldap via "source", inspect dump pages)</label>
@@ -280,6 +285,7 @@ $('startBtn').onclick = async () => {
     api_base_url: $('apiBaseUrl').value.trim(),
     api_key: $('apiKey').value.trim(),
     debug: $('debugMode').checked,
+    stream: $('streamMode').checked,
     mask_pii: $('maskPii').checked,
     mask_secrets: $('maskSecrets').checked,
     mask_semantic: $('maskSemantic').checked,

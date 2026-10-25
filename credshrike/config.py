@@ -94,6 +94,12 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     ],  # NOTE: .docx/.xlsx/.pptx are NOT skipped — text is extracted from the OOXML zip
     # --- debug mode: echo + record FULL tool results (what the model saw) --
     "debug": False,
+    # --- streaming (SSE) ----------------------------------------------------
+    # Same model/prompt/cost — only the transport differs. Tokens are echoed
+    # live, long requests are less likely to hit proxy idle timeouts, and the
+    # final message is identical to a non-streaming call. Falls back to a
+    # plain request automatically when an endpoint rejects streaming.
+    "stream": True,
     # --- context-window management ------------------------------------------
     "context_token_limit": 0,       # 0 = auto-manage off (set your model's
                                     # window, e.g. 128000 for GLM, 1000000 for
@@ -155,6 +161,7 @@ class Policy:
     read_threads: int = DEFAULT_POLICY_DICT["read_threads"]
     dump_skip_exts: list[str] = field(default_factory=lambda: list(DEFAULT_POLICY_DICT["dump_skip_exts"]))
     debug: bool = DEFAULT_POLICY_DICT["debug"]
+    stream: bool = DEFAULT_POLICY_DICT["stream"]
     context_token_limit: int = DEFAULT_POLICY_DICT["context_token_limit"]
     compact_at_ratio: float = DEFAULT_POLICY_DICT["compact_at_ratio"]
     compact_keep_recent: int = DEFAULT_POLICY_DICT["compact_keep_recent"]

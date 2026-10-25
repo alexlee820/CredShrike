@@ -309,6 +309,8 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.thinking_mode = "off"
     if params.get("debug"):
         policy.debug = True
+    if "stream" in params:
+        policy.stream = bool(params["stream"])
     if "mask_pii" in params:
         policy.mask_pii = bool(params["mask_pii"])
     if "mask_secrets" in params:

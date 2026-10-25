@@ -115,3 +115,7 @@ policy:
   # adaptive thinking is Anthropic-specific; it is auto-disabled when
   # api_base_url is set (override with CLI --thinking adaptive)
   thinking_mode: adaptive
+  # SSE streaming: live token output, same final message/cost/result.
+  # Falls back to a plain request if the endpoint rejects it.
+  # CLI: --stream / --no-stream
+  stream: true
