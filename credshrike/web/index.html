@@ -155,12 +155,12 @@
           (verify adws/ldap via "source", inspect dump pages)</label>
       </div>
       <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="maskPii" style="width:auto"/>
+        <input type="checkbox" id="maskPii" style="width:auto" checked/>
         <label style="margin:0" for="maskPii">Mask PII before sending to the LLM
-          — emails, IPs, phones, cards, IBANs, VAT → <code>[[TYPE_N]]</code></label>
+          — emails, usernames, IPs, phones, cards, IBANs, VAT</label>
       </div>
       <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="maskSecrets" style="width:auto"/>
+        <input type="checkbox" id="maskSecrets" style="width:auto" checked/>
         <label style="margin:0" for="maskSecrets">Mask secrets before sending to the LLM
           — API keys, JWTs, private keys, passwords (restored in the report)</label>
       </div>

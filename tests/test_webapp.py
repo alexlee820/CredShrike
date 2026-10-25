@@ -331,3 +331,14 @@ def test_index_aliases_and_favicon(client):
         assert r.status_code in (301, 302, 308), path
         assert r.headers["Location"].endswith("/"), path
     assert client.get("/favicon.ico").status_code == 204
+
+
+def test_masking_defaults_in_ui(client):
+    """Web UI opens with masking on and the two replacement domains filled."""
+    html = client.get("/").get_data(as_text=True)
+    for cid in ("maskPii", "maskSecrets"):
+        line = next(l for l in html.splitlines() if f'id="{cid}"' in l)
+        assert "checked" in line, cid
+    for cid, value in (("emailDomain", "corp.local"), ("netbiosDomain", "corp")):
+        line = next(l for l in html.splitlines() if f'id="{cid}"' in l)
+        assert f'value="{value}"' in line, cid
