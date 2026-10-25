@@ -288,6 +288,18 @@ def _auth_from_params(params: dict) -> dict:
 def _apply_policy_overrides(policy: Policy, params: dict) -> None:
     if params.get("model"):
         policy.model = params["model"]
+    # numeric caps/budgets from the "limits & budgets" section; empty = keep
+    # the policy (or DEFAULT_POLICY_DICT) value
+    for key in ("max_file_bytes", "result_char_cap", "dump_per_file_bytes",
+                "dump_max_files", "dump_depth", "max_total_read_bytes",
+                "max_tool_calls", "wall_clock_seconds", "max_entries",
+                "scan_max_files", "scan_max_file_bytes"):
+        try:
+            value = int(params.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            setattr(policy, key, value)
     if params.get("concurrency"):
         policy.read_threads = int(params["concurrency"])
     if params.get("read_gate"):

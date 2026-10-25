@@ -144,6 +144,11 @@ credshrike agent --host FILE01.hackaday.lab ... --preset snaffler
 credshrike ui          # → http://127.0.0.1:8080
 ```
 
+The form includes an **advanced → limits & budgets** section (reads per call,
+tool-result chars, full-mode head size, max files, total read budget, tool
+calls, wall clock, scan caps) and an optional **policy YAML path**. Empty
+fields keep the policy/default values; everything is applied per run.
+
 ### Manual CLI (no LLM needed)
 
 ```bash

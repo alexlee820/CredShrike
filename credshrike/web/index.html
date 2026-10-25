@@ -235,6 +235,36 @@
       </div>
     </details>
 
+    <details>
+      <summary>limits &amp; budgets (advanced — empty = policy default)</summary>
+      <div class="grid2" style="margin-top:10px">
+        <div class="field full"><label>Policy YAML path (optional)</label>
+          <input id="policyPath" placeholder="policy.yaml"/></div>
+        <div class="field"><label>Read bytes per call (KiB)</label>
+          <input id="maxFileKb" type="number" placeholder="256"/></div>
+        <div class="field"><label>Tool result chars per call</label>
+          <input id="resultCharCap" type="number" placeholder="8192"/></div>
+        <div class="field"><label>Full-mode head per file (KiB)</label>
+          <input id="dumpPerFileKb" type="number" placeholder="16"/></div>
+        <div class="field"><label>Max files per share</label>
+          <input id="dumpMaxFiles" type="number" placeholder="500"/></div>
+        <div class="field"><label>Dump depth (dirs)</label>
+          <input id="dumpDepth" type="number" placeholder="6"/></div>
+        <div class="field"><label>Total read per run (MiB)</label>
+          <input id="maxReadMiB" type="number" placeholder="10"/></div>
+        <div class="field"><label>Max tool calls per run</label>
+          <input id="maxToolCalls" type="number" placeholder="100"/></div>
+        <div class="field"><label>Wall clock (seconds)</label>
+          <input id="wallClock" type="number" placeholder="1800"/></div>
+        <div class="field"><label>Max directory entries</label>
+          <input id="maxEntries" type="number" placeholder="500"/></div>
+        <div class="field"><label>Scan: max files</label>
+          <input id="scanMaxFiles" type="number" placeholder="200"/></div>
+        <div class="field"><label>Scan: bytes per file (KiB)</label>
+          <input id="scanMaxFileKb" type="number" placeholder="64"/></div>
+      </div>
+    </details>
+
     <button id="startBtn">Start run</button>
     <div class="hint">Credentials stay on this machine · server binds 127.0.0.1</div>
   </section>
@@ -302,6 +332,18 @@ $('startBtn').onclick = async () => {
     api_key: $('apiKey').value.trim(),
     debug: $('debugMode').checked,
     stream: $('streamMode').checked,
+    policy_path: $('policyPath').value.trim(),
+    max_file_bytes: $('maxFileKb').value ? Math.round($('maxFileKb').value * 1024) : '',
+    result_char_cap: $('resultCharCap').value || '',
+    dump_per_file_bytes: $('dumpPerFileKb').value ? Math.round($('dumpPerFileKb').value * 1024) : '',
+    dump_max_files: $('dumpMaxFiles').value || '',
+    dump_depth: $('dumpDepth').value || '',
+    max_total_read_bytes: $('maxReadMiB').value ? Math.round($('maxReadMiB').value * 1048576) : '',
+    max_tool_calls: $('maxToolCalls').value || '',
+    wall_clock_seconds: $('wallClock').value || '',
+    max_entries: $('maxEntries').value || '',
+    scan_max_files: $('scanMaxFiles').value || '',
+    scan_max_file_bytes: $('scanMaxFileKb').value ? Math.round($('scanMaxFileKb').value * 1024) : '',
     mask_pii: $('maskPii').checked,
     mask_secrets: $('maskSecrets').checked,
     mask_semantic: $('maskSemantic').checked,

@@ -342,3 +342,40 @@ def test_masking_defaults_in_ui(client):
     for cid, value in (("emailDomain", "corp.local"), ("netbiosDomain", "corp")):
         line = next(l for l in html.splitlines() if f'id="{cid}"' in l)
         assert f'value="{value}"' in line, cid
+
+
+def test_ui_limit_overrides():
+    """The limits & budgets section maps straight onto Policy caps."""
+    from credshrike.config import Policy
+    p = Policy()
+    webapp._apply_policy_overrides(p, {
+        "max_file_bytes": 1048576, "result_char_cap": 16384,
+        "dump_per_file_bytes": 65536, "dump_max_files": 2000,
+        "dump_depth": 8, "max_total_read_bytes": 104857600,
+        "max_tool_calls": 300, "wall_clock_seconds": 7200,
+        "max_entries": 1000, "scan_max_files": 500,
+        "scan_max_file_bytes": 131072})
+    assert p.max_file_bytes == 1048576
+    assert p.result_char_cap == 16384
+    assert p.dump_per_file_bytes == 65536
+    assert p.dump_max_files == 2000
+    assert p.dump_depth == 8
+    assert p.max_total_read_bytes == 104857600
+    assert p.max_tool_calls == 300
+    assert p.wall_clock_seconds == 7200
+    assert p.max_entries == 1000
+    assert p.scan_max_files == 500
+    assert p.scan_max_file_bytes == 131072
+    # blank / invalid values keep the policy default
+    p2 = Policy()
+    webapp._apply_policy_overrides(p2, {"max_file_bytes": "", "max_tool_calls": "x"})
+    assert p2.max_file_bytes == Policy().max_file_bytes
+    assert p2.max_tool_calls == Policy().max_tool_calls
+
+
+def test_ui_has_limit_fields(client):
+    html = client.get("/").get_data(as_text=True)
+    for cid in ("policyPath", "maxFileKb", "resultCharCap", "dumpPerFileKb",
+                "dumpMaxFiles", "dumpDepth", "maxReadMiB", "maxToolCalls",
+                "wallClock", "maxEntries", "scanMaxFiles", "scanMaxFileKb"):
+        assert f'id="{cid}"' in html, cid
