@@ -65,6 +65,8 @@ def _load_policy(args) -> Policy:
         policy.mask_surrogate_style = args.surrogate_style
     if getattr(args, "mask_email_domain", None):
         policy.mask_email_domain = args.mask_email_domain
+    if getattr(args, "mask_netbios_domain", None):
+        policy.mask_netbios_domain = args.mask_netbios_domain
     if getattr(args, "skip_exts", None) is not None:
         raw = args.skip_exts.strip().lower()
         if raw == "none" or raw == "":
@@ -387,6 +389,9 @@ def register(subparsers) -> None:
     p.add_argument("--mask-email-domain", default=None, metavar="DOMAIN",
                    help="domain used for masked email/UPN addresses "
                         "(default corp.local)")
+    p.add_argument("--mask-netbios-domain", default=None, metavar="DOMAIN",
+                   help="domain used for masked DOMAIN\\user accounts "
+                        "(default corp; FQDN forms use the email domain)")
     p.add_argument("--scan-patterns", default=None,
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")

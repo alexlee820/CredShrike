@@ -192,8 +192,9 @@ def test_username_detectors_cover_domain_key_json_and_path():
             r'"sam_account": "jchen"; path C:\Users\jchen\docs')
     masked, hits = masker.mask_text(text)
     assert "jchen" not in masked
-    assert "HACKADAY\\" in masked and "C:\\Users\\" in masked and "\\docs" in masked
-    surrogate = masked.split("HACKADAY\\")[1].split(" ")[0]
+    assert "HACKADAY" not in masked and "corp\\" in masked
+    assert "C:\\Users\\" in masked and "\\docs" in masked
+    surrogate = masked.split("corp\\")[1].split(" ")[0]
     # the SAME account gets the SAME surrogate everywhere in the context
     assert f"username: {surrogate}" in masked
     assert f'"sam_account": "{surrogate}"' in masked
@@ -212,10 +213,19 @@ def test_upn_and_bare_username_share_one_surrogate():
     masker = Masker(pii=True, secrets=False)
     text = r"HACKADAY\jchen <jchen@hackaday.lab>"
     masked, _ = masker.mask_text(text)
-    assert "jchen" not in masked and "@corp.local" in masked
+    assert "jchen" not in masked and "HACKADAY" not in masked
+    assert "@corp.local" in masked and "corp\\" in masked
     local = masked.split("<")[1].split("@")[0]
-    assert f"HACKADAY\\{local}" in masked
+    assert f"corp\\{local}" in masked
     assert masker.restore(masked) == text
+
+
+def test_fqdn_domain_form_uses_the_email_domain():
+    masker = Masker(pii=True, secrets=False)
+    masked, _ = masker.mask_text(r"hackaday.lab\jchen")
+    assert masked.startswith("corp.local\\")
+    assert "jchen" not in masked
+    assert masker.restore(masked) == r"hackaday.lab\jchen"
 
 
 def test_safe_rejects_overlap_with_real_values_but_allows_email_local():

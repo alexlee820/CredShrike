@@ -179,7 +179,8 @@ def cmd_mask(args) -> None:
                    else ["PERSON", "ENV_PASSWORD", "USERNAME", "EMAIL_ADDRESS"])
     from .surrogate import SurrogateFactory
     factory = (SurrogateFactory(style=args.surrogate_style,
-                                email_domain=args.email_domain)
+                                email_domain=args.email_domain,
+                                netbios_domain=args.netbios_domain)
                if same_length else None)
     masker = Masker(pii=pii, secrets=secrets, allowlist=allow, denylist=deny,
                     semantic_backend=backend,
@@ -226,6 +227,9 @@ def _register_mask(subparsers) -> None:
     p.add_argument("--email-domain", default="corp.local",
                    help="domain used for masked email/UPN addresses "
                         "(default corp.local)")
+    p.add_argument("--netbios-domain", default="corp",
+                   help="domain used for masked DOMAIN\\user accounts "
+                        "(default corp; FQDN forms use --email-domain)")
     p.add_argument("--mapping", metavar="PATH",
                    help="save the placeholder→value map as JSON (enables restore)")
     p.add_argument("--restore", metavar="MAPPING_JSON",

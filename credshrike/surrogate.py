@@ -299,12 +299,14 @@ class SurrogateFactory:
 
     def __init__(self, *, style: str = "name", keep_initials: bool = True,
                  min_len: int = 4, rng: Optional[random.Random] = None,
-                 email_domain: str = "corp.local") -> None:
+                 email_domain: str = "corp.local",
+                 netbios_domain: str = "corp") -> None:
         self.style = style if style in ("name", "syllable", "masked") else "name"
         self.keep_initials = bool(keep_initials)
         self.min_len = max(1, int(min_len))
         self.rng = rng or random.Random()
         self.email_domain = email_domain or "corp.local"
+        self.netbios_domain = netbios_domain or "corp"
         self._username_map: dict[str, str] = {}
 
     def handles(self, entity: str) -> bool:
@@ -344,6 +346,18 @@ class SurrogateFactory:
             candidate = f"{new_local}@{self.email_domain}"
             return candidate if self._safe(candidate, value, text, existing) else None
 
+        if entity in _USERNAME_ENTITIES and "\\" in value:
+            # DOMAIN\user -> corp\user (or corp.local\user for an FQDN domain)
+            domain, _sep, user = value.partition("\\")
+            if len(user) < 2:
+                return None
+            new_user = self._username(user, text, existing)
+            if not new_user:
+                return None
+            new_domain = self.email_domain if "." in domain else self.netbios_domain
+            candidate = f"{new_domain}\\{new_user}"
+            return candidate if self._safe(candidate, value, text, existing) else None
+
         if len(value) < self.min_len:
             return None
 
@@ -366,7 +380,14 @@ class SurrogateFactory:
         if candidate in text:
             return False
         for token, original in existing.items():
-            if candidate == token or candidate == original:
+            if candidate == token:
+                # Reusing an account's own bare token (same original value)
+                # is exactly what we want (bare username vs DOMAIN\user vs
+                # email local part); any other collision is not.
+                if original == value:
+                    continue
+                return False
+            if candidate == original:
                 return False
             # A candidate may legitimately occur inside a longer token (the
             # bare username inside that account's email); longest-first

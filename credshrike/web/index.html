@@ -184,6 +184,8 @@
         </select></div>
       <div class="field"><label>Masked email domain</label>
         <input id="emailDomain" value="corp.local"/></div>
+      <div class="field"><label>Masked NetBIOS domain (DOMAIN\user)</label>
+        <input id="netbiosDomain" value="corp"/></div>
       <div class="field" style="flex-direction:row;align-items:center;gap:8px">
         <input type="checkbox" id="noMaskRestore" style="width:auto"/>
         <label style="margin:0" for="noMaskRestore">Do NOT restore masked values in the
@@ -306,6 +308,7 @@ $('startBtn').onclick = async () => {
     use_surrogates: $('useSurrogates').checked,
     surrogate_style: $('surrogateStyle').value,
     mask_email_domain: $('emailDomain').value.trim() || 'corp.local',
+    mask_netbios_domain: $('netbiosDomain').value.trim() || 'corp',
     no_mask_restore: $('noMaskRestore').checked,
     context_limit: $('contextLimit').value || 0,
     computers_filter: $('computersFilter').value.trim(),

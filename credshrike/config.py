@@ -74,6 +74,7 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "mask_surrogate_keep_initials": True,  # Alice -> Amber (A kept)
     "mask_surrogate_min_len": 4,           # shorter values -> [[TYPE_N]]
     "mask_email_domain": "corp.local",     # jchen@hackaday.lab -> kford@corp.local
+    "mask_netbios_domain": "corp",         # HACKADAY\jchen -> corp\kford
     # --- snaffler-style scan tool (smb_scan_share) --------------------------
     "scan_depth": 3,
     "scan_max_files": 200,              # candidates opened per sweep
@@ -163,6 +164,7 @@ class Policy:
     mask_surrogate_keep_initials: bool = DEFAULT_POLICY_DICT["mask_surrogate_keep_initials"]
     mask_surrogate_min_len: int = DEFAULT_POLICY_DICT["mask_surrogate_min_len"]
     mask_email_domain: str = DEFAULT_POLICY_DICT["mask_email_domain"]
+    mask_netbios_domain: str = DEFAULT_POLICY_DICT["mask_netbios_domain"]
     scan_depth: int = DEFAULT_POLICY_DICT["scan_depth"]
     scan_max_files: int = DEFAULT_POLICY_DICT["scan_max_files"]
     scan_max_file_bytes: int = DEFAULT_POLICY_DICT["scan_max_file_bytes"]

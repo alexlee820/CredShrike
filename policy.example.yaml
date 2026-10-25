@@ -102,6 +102,7 @@ policy:
   # EMAIL_ADDRESS: local part pseudonymised, domain normalised to corp.local
   mask_same_length: [PERSON, ENV_PASSWORD, USERNAME, EMAIL_ADDRESS]
   mask_email_domain: corp.local   # jchen@hackaday.lab -> kford@corp.local
+  mask_netbios_domain: corp       # HACKADAY\jchen -> corp\kford (FQDN -> corp.local\kford)
   mask_surrogate_style: name      # name | syllable | masked
   mask_surrogate_keep_initials: true
   mask_surrogate_min_len: 4

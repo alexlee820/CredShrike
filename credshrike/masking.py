@@ -202,7 +202,8 @@ def _pii_detectors() -> list[Detector]:
         Detector("EMAIL_ADDRESS", _EMAIL_RE, kind="pii"),
         Detector("USERNAME", _USERNAME_KEY_RE, group=1, kind="pii",
                  validate=_not_builtin_profile),
-        Detector("USERNAME", _USERNAME_DOMAIN_RE, group=2, kind="pii"),
+        # whole DOMAIN\user match: the domain is normalised too
+        Detector("USERNAME", _USERNAME_DOMAIN_RE, group=0, kind="pii"),
         Detector("USERNAME", _USERNAME_PATH_RE, group=1, kind="pii",
                  validate=_not_builtin_profile),
         Detector("IP_ADDRESS", _IPV6_RE, validate=_ipv6_valid, kind="pii"),
@@ -454,6 +455,7 @@ class Masker:
                                            "mask_surrogate_keep_initials", True)),
                 min_len=int(getattr(policy, "mask_surrogate_min_len", 4)),
                 email_domain=str(getattr(policy, "mask_email_domain", "corp.local")),
+                netbios_domain=str(getattr(policy, "mask_netbios_domain", "corp")),
             )
         return cls(
             pii=pii, secrets=secrets,

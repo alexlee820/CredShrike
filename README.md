@@ -208,14 +208,14 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
 
 - **Same-length pseudonyms** for names, passwords, usernames and emails (on by
   default): `Alice Smith` → `Amber Scott` (initials/separators/case kept),
-  `Winter2024!` → `Xkqmbn7314#` (same classes), `HACKADAY\jchen` → `HACKADAY\kford`,
-  `C:\Users\jchen\...` → `C:\Users\kford\...`, and
-  `jchen@hackaday.lab` → `kford@corp.local` (local part same length, domain
+  `Winter2024!` → `Xkqmbn7314#` (same classes), `HACKADAY\jchen` → `corp\kford`
+  (FQDN domains → `corp.local\kford`), `C:\Users\jchen\...` → `C:\Users\kford\...`,
+  and `jchen@hackaday.lab` → `kford@corp.local` (local part same length, domain
   normalised). The same account reuses one surrogate inside a context; tool
   arguments are restored before execution so paths the model builds still
   resolve. Real name dictionaries are indexed by length; uncovered lengths use
   a syllable generator, and short/unsafe values fall back to `[[TYPE_N]]`.
-  Configure with `mask_same_length`, `mask_email_domain`,
+  Configure with `mask_same_length`, `mask_email_domain`, `mask_netbios_domain`,
   `mask_surrogate_style` (`name|syllable|masked`),
   `mask_surrogate_keep_initials`, `mask_surrogate_min_len`, or
   `--no-surrogates` / `--surrogate-style`.
