@@ -99,7 +99,7 @@ to call.
 ### Install & Test
 
 ```bash
-# Option A — plain requirements file (core + masking validators)
+# Option A — requirements file (core + masking validators + GLiNER)
 pip install -r requirements.txt
 
 # Option B — as a package, with extras
@@ -222,7 +222,7 @@ semantic layer — `urchade/gliner_multi_pii-v1`, labels `person`, `location`,
 windows with 64-token overlap:
 
 ```bash
-pip install "credshrike[semantic]"      # pulls torch; ~a few hundred MB
+pip install "credshrike[semantic]"      # pulls torch; model is ~1.1 GB
 credshrike agent --preset full --host filesrv01 ... \
   --mask-secrets --mask-semantic
 ```
@@ -238,6 +238,11 @@ credshrike agent --preset full --host filesrv01 ... \
   helps.
 - Override the checkpoint with `--mask-semantic-model` (HF repo ID or local
   path) or tune `mask_semantic_threshold` / `mask_semantic_floors` in policy.
+- **Windows:** the model is fetched with `snapshot_download(local_dir=...)`
+  into `~/.cache/credshrike/models/` (override with `CREDSHRIKE_MODEL_DIR`).
+  The default Hugging Face cache links blobs with symlinks, which Windows
+  refuses without Developer Mode/admin (`WinError 1314`) — the local-dir
+  download writes real files instead and needs no privileges.
 
 Standalone use (no SMB, no LLM): `credshrike mask --semantic < incident.log`.
 

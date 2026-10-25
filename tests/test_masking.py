@@ -382,3 +382,31 @@ def test_semantic_backend_fails_closed_with_install_hint(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(RuntimeError, match="pip install"):
         GlinerBackend().load()
+
+
+def test_model_cache_root_env_override(monkeypatch, tmp_path):
+    from credshrike import semantic as sem
+    monkeypatch.setenv("CREDSHRIKE_MODEL_DIR", str(tmp_path))
+    assert sem.model_cache_root() == tmp_path
+
+
+def test_materialize_model_uses_local_dir_and_caches(monkeypatch, tmp_path):
+    """Windows-safe path: snapshot_download(local_dir=...) writes real files
+    (the default HF cache needs symlink privileges)."""
+    import huggingface_hub
+    from credshrike import semantic as sem
+
+    monkeypatch.setenv("CREDSHRIKE_MODEL_DIR", str(tmp_path))
+    calls = []
+
+    def fake_download(repo_id, local_dir):
+        calls.append((repo_id, local_dir))
+        (tmp_path / "urchade--gliner_multi_pii-v1" / "gliner_config.json").write_text("{}")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_download)
+    target = tmp_path / "urchade--gliner_multi_pii-v1"
+    target.mkdir()
+    first = sem.materialize_model("urchade/gliner_multi_pii-v1")
+    second = sem.materialize_model("urchade/gliner_multi_pii-v1")
+    assert first == second == str(target)
+    assert calls == [("urchade/gliner_multi_pii-v1", str(target))]   # cached

@@ -14,6 +14,7 @@ fallback either.
 Labels/thresholds match upstream:
 
 - labels ``person``, ``location``, ``address``; ``address`` maps to LOCATION
+- first use downloads ``urchade/gliner_multi_pii-v1`` (~1.1 GB)
 - per-label floors: person 0.99, location 0.80, address 0.80
 - the call-level threshold can only RAISE a floor (``max``)
 - 384-token windows, 64-token overlap, inference serialized by a lock
@@ -21,12 +22,15 @@ Labels/thresholds match upstream:
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 __all__ = ["SemanticSpan", "GlinerBackend", "get_backend", "token_windows",
+           "model_cache_root", "materialize_model",
            "DEFAULT_MODEL", "DEFAULT_LABELS", "LABEL_ENTITIES"]
 
 DEFAULT_MODEL = "urchade/gliner_multi_pii-v1"
@@ -36,6 +40,34 @@ LABEL_ENTITIES = {"person": "PERSON", "location": "LOCATION",
 DEFAULT_FLOORS = {"person": 0.99, "location": 0.80, "address": 0.80}
 
 _TOKEN_RE = re.compile(r"\w+(?:[-_]\w+)*|\S")
+_MODEL_DIR_ENV = "CREDSHRIKE_MODEL_DIR"
+
+
+def model_cache_root() -> Path:
+    """Where Windows-safe snapshots are stored (override: CREDSHRIKE_MODEL_DIR)."""
+    override = os.environ.get(_MODEL_DIR_ENV)
+    if override:
+        return Path(os.path.expanduser(override))
+    return Path.home() / ".cache" / "credshrike" / "models"
+
+
+def materialize_model(model_id: str) -> str:
+    """Download a HF repo with ``snapshot_download(local_dir=...)``.
+
+    huggingface_hub's default cache stores blobs and links them with symlinks.
+    Windows cannot create symlinks without Developer Mode or administrator
+    rights, which surfaces as ``OSError: [WinError 1314] A required privilege
+    is not held by the client`` (not a PermissionError, so hf_hub's copy
+    fallback misses it). ``local_dir`` writes real files to a stable folder
+    instead — no symlinks, no privilege needed.
+    """
+    from huggingface_hub import snapshot_download
+
+    slug = model_id.replace("/", "--").replace(":", "-")
+    target = model_cache_root() / slug
+    if not (target / "gliner_config.json").is_file():
+        snapshot_download(repo_id=model_id, local_dir=str(target))
+    return str(target)
 
 
 @dataclass(frozen=True)
@@ -105,7 +137,11 @@ class GlinerBackend:
                 "it with: pip install \"gliner>=0.2.27,<0.3\"  (pulls torch; the "
                 f"model {self.model_name!r} downloads on first use)") from exc
         try:
-            self._model = GLiNER.from_pretrained(self.model_name)
+            model_ref = os.path.expanduser(self.model_name)
+            if os.name == "nt" and not Path(model_ref).exists():
+                # avoid the symlink-based HF cache on Windows (see module doc)
+                model_ref = materialize_model(self.model_name)
+            self._model = GLiNER.from_pretrained(model_ref)
         except Exception as exc:  # pragma: no cover - model/network dependent
             raise RuntimeError(
                 f"failed to load GLiNER model {self.model_name!r}: "

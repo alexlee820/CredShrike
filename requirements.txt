@@ -24,11 +24,12 @@ Flask>=2.3                 # `credshrike ui`
 phonenumbers>=8.13         # libphonenumber validity for PHONE_NUMBER
 python-stdnum>=1.20        # EU VAT checksums (and IBAN if stdnum is preferred)
 
-# --- optional: GLiNER semantic masking (PERSON / LOCATION / ADDRESS) ------
-# HEAVY: pulls torch (hundreds of MB to a few GB depending on the wheel) and
-# downloads urchade/gliner_multi_pii-v1 on first use. Only needed for
-# `--mask-semantic`. Uncomment to install, or use: pip install -e ".[semantic]"
-# gliner>=0.2.27,<0.3
+# --- GLiNER semantic masking (PERSON / LOCATION / ADDRESS) ----------------
+# Needed for --mask-semantic. Pulls torch when it is not already present and
+# downloads urchade/gliner_multi_pii-v1 (~1.1 GB) on first use. If you do not
+# want the semantic layer, comment this line out — the deterministic masker
+# does not need it.
+gliner>=0.2.27,<0.3
 
 # --- dev / tests -----------------------------------------------------------
 # pytest>=8.0
