@@ -83,6 +83,16 @@ policy:
   mask_max_scan_chars: 200000     # chunk size; the WHOLE text is scanned
   mask_allowlist: []              # never mask: [{pattern: "Company Inc."}]
   mask_denylist: []               # always mask: [{pattern: 'CUST-\d{6}', type: CUSTOMER_ID, regex: true}]
+  # Optional GLiNER semantic layer (names & addresses). Needs
+  # `pip install "credshrike[semantic]"`; the model downloads on first use and
+  # CPU inference is slow on large dumps. Fails closed if it cannot load.
+  mask_semantic: false            # CLI: --mask-semantic
+  mask_semantic_model: urchade/gliner_multi_pii-v1   # HF repo ID or local path
+  mask_semantic_threshold: 0.7    # call-level floor (person .99, location/address .80)
+  mask_semantic_labels: [person, location, address]  # address maps to LOCATION
+  mask_semantic_floors: {}        # per-label overrides: {person: 0.9}
+  mask_semantic_max_tokens: 384   # window size (64-token overlap)
+  mask_semantic_overlap: 64
 
   # --- snaffler-style sweep tool (smb_scan_share / --preset snaffler) ------
   scan_depth: 3                   # directory levels below the start path

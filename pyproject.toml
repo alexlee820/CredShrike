@@ -18,6 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# semantic PII masks (PERSON/LOCATION) — pulls torch; model downloads on first use
+semantic = ["gliner>=0.2.27,<0.3"]
 
 [project.scripts]
 credshrike = "credshrike.cli:main"

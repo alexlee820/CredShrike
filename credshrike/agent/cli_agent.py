@@ -48,6 +48,11 @@ def _load_policy(args) -> Policy:
         policy.mask_pii = True
     if getattr(args, "mask_secrets", False):
         policy.mask_secrets = True
+    if getattr(args, "mask_semantic", False):
+        policy.mask_semantic = True
+    if getattr(args, "mask_semantic_model", None):
+        policy.mask_semantic_model = args.mask_semantic_model
+        policy.mask_semantic = True
     if getattr(args, "no_mask_restore", False):
         policy.mask_restore = False
     if getattr(args, "skip_exts", None) is not None:
@@ -342,6 +347,12 @@ def register(subparsers) -> None:
                         "keys, passwords, connection strings) before content "
                         "reaches the LLM provider; values are restored in the "
                         "model's output so the report still carries evidence")
+    p.add_argument("--mask-semantic", action="store_true",
+                   help="also mask names/addresses with the GLiNER semantic "
+                        "backend (PERSON/LOCATION; needs `pip install gliner`, "
+                        "downloads urchade/gliner_multi_pii-v1 on first use)")
+    p.add_argument("--mask-semantic-model", default=None, metavar="MODEL",
+                   help="GLiNER checkpoint or local path (implies --mask-semantic)")
     p.add_argument("--no-mask-restore", action="store_true",
                    help="leave [[TYPE_N]] placeholders in the output instead of "
                         "restoring the original values (maximum privacy)")

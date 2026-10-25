@@ -53,6 +53,18 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
                                         # [{"pattern": "Company Inc.", "regex": false}]
     "mask_denylist": [],                # always masked, custom type:
                                         # [{"pattern": "CUST-\\d{6}", "type": "CUSTOMER_ID", "regex": true}]
+    # --- optional GLiNER semantic PII layer (PERSON / LOCATION) -----------
+    # needs `pip install "gliner>=0.2.27,<0.3"`; the model downloads on first
+    # use. Deterministic detectors still win on overlap.
+    "mask_semantic": False,
+    "mask_semantic_model": "urchade/gliner_multi_pii-v1",
+    "mask_semantic_threshold": 0.7,     # call-level floor (can only RAISE
+                                        # the per-label floors: person .99,
+                                        # location/address .80)
+    "mask_semantic_labels": ["person", "location", "address"],
+    "mask_semantic_floors": {},         # per-label overrides, e.g. {person: 0.9}
+    "mask_semantic_max_tokens": 384,    # window size (64-token overlap)
+    "mask_semantic_overlap": 64,
     # --- snaffler-style scan tool (smb_scan_share) --------------------------
     "scan_depth": 3,
     "scan_max_files": 200,              # candidates opened per sweep
@@ -122,6 +134,14 @@ class Policy:
     mask_max_scan_chars: int = DEFAULT_POLICY_DICT["mask_max_scan_chars"]
     mask_allowlist: list = field(default_factory=list)
     mask_denylist: list = field(default_factory=list)
+    mask_semantic: bool = DEFAULT_POLICY_DICT["mask_semantic"]
+    mask_semantic_model: str = DEFAULT_POLICY_DICT["mask_semantic_model"]
+    mask_semantic_threshold: float = DEFAULT_POLICY_DICT["mask_semantic_threshold"]
+    mask_semantic_labels: list = field(
+        default_factory=lambda: list(DEFAULT_POLICY_DICT["mask_semantic_labels"]))
+    mask_semantic_floors: dict = field(default_factory=dict)
+    mask_semantic_max_tokens: int = DEFAULT_POLICY_DICT["mask_semantic_max_tokens"]
+    mask_semantic_overlap: int = DEFAULT_POLICY_DICT["mask_semantic_overlap"]
     scan_depth: int = DEFAULT_POLICY_DICT["scan_depth"]
     scan_max_files: int = DEFAULT_POLICY_DICT["scan_max_files"]
     scan_max_file_bytes: int = DEFAULT_POLICY_DICT["scan_max_file_bytes"]

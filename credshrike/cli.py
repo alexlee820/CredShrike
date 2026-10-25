@@ -171,7 +171,12 @@ def cmd_mask(args) -> None:
     allow = [{"pattern": p} for p in (args.allow or [])]
     deny = [{"pattern": p, "regex": not args.deny_literal, "type": "DENYLIST"}
             for p in (args.deny or [])]
-    masker = Masker(pii=pii, secrets=secrets, allowlist=allow, denylist=deny)
+    backend = None
+    if args.semantic or args.semantic_model:
+        from .semantic import get_backend
+        backend = get_backend(model_name=args.semantic_model or "")
+    masker = Masker(pii=pii, secrets=secrets, allowlist=allow, denylist=deny,
+                    semantic_backend=backend)
     masked, hits = masker.mask_text(text)
     sys.stdout.write(masked)
     if args.mapping:
@@ -198,6 +203,11 @@ def _register_mask(subparsers) -> None:
                    help="always mask this pattern (repeatable)")
     p.add_argument("--deny-literal", action="store_true",
                    help="treat --deny patterns as literals instead of regexes")
+    p.add_argument("--semantic", action="store_true",
+                   help="also mask names/addresses with GLiNER (PERSON/LOCATION; "
+                        "needs `pip install gliner`, downloads the model once)")
+    p.add_argument("--semantic-model", default=None, metavar="MODEL",
+                   help="GLiNER checkpoint or local path (implies --semantic)")
     p.add_argument("--mapping", metavar="PATH",
                    help="save the placeholder→value map as JSON (enables restore)")
     p.add_argument("--restore", metavar="MAPPING_JSON",

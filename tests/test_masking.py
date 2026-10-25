@@ -276,3 +276,109 @@ def test_mask_cli_roundtrip(tmp_path, capsys):
     assert main(["mask", str(masked_file), "--restore", str(mapping)]) == 0
     restored = capsys.readouterr().out
     assert "alice@corp.local" in restored and AWS_KEY in restored
+
+
+# --------------------------------------------------------------------------- #
+# GLiNER semantic backend (PERSON / LOCATION)
+# --------------------------------------------------------------------------- #
+from credshrike.semantic import SemanticSpan, token_windows  # noqa: E402
+
+
+class FakeSemanticBackend:
+    """Stand-in for GlinerBackend: returns canned spans, records calls."""
+
+    def __init__(self, spans):
+        self.spans = list(spans)
+        self.calls = []
+
+    def detect(self, text, threshold=None):
+        self.calls.append((text, threshold))
+        return list(self.spans)
+
+
+def test_semantic_masks_person_and_location():
+    text = "Alice Smith met Bob Jones in Berlin."
+    backend = FakeSemanticBackend([
+        SemanticSpan("PERSON", 0, 11, 0.99),
+        SemanticSpan("PERSON", 16, 25, 0.98),
+        SemanticSpan("LOCATION", 29, 35, 0.90),
+    ])
+    masker = Masker(pii=False, secrets=False, semantic_backend=backend,
+                    semantic_threshold=0.7)
+    masked, hits = masker.mask_text(text)
+    assert hits == 3
+    assert masked == "[[PERSON_1]] met [[PERSON_2]] in [[LOCATION_1]]."
+    assert masker.restore(masked) == text
+    assert backend.calls and backend.calls[0][1] == 0.7   # threshold forwarded
+
+
+def test_deterministic_spans_win_over_semantic_overlap():
+    text = "Email Alice at alice@corp.local now"
+    # GLiNER is greedy: its PERSON span swallows the email
+    backend = FakeSemanticBackend([SemanticSpan("PERSON", 6, 31, 0.99)])
+    masker = Masker(pii=True, secrets=False, semantic_backend=backend)
+    masked, _ = masker.mask_text(text)
+    # the email keeps its own placeholder; only the uncovered fragment is PERSON
+    assert "[[EMAIL_ADDRESS_1]]" in masked
+    assert "alice@corp.local" not in masked
+    assert "[[PERSON_1]]" in masked
+    assert masker.restore(masked).startswith("Email Alice at alice@corp.local")
+
+
+def test_semantic_longest_span_wins():
+    text = "Alice Smith"
+    backend = FakeSemanticBackend([
+        SemanticSpan("PERSON", 0, 11, 0.95),
+        SemanticSpan("LOCATION", 0, 5, 0.99),   # shorter, higher score: loses
+    ])
+    masker = Masker(pii=False, secrets=False, semantic_backend=backend)
+    masked, hits = masker.mask_text(text)
+    assert hits == 1 and masked == "[[PERSON_1]]"
+    assert "LOCATION" not in masked
+
+
+def test_semantic_backend_alone_is_enough():
+    backend = FakeSemanticBackend([SemanticSpan("PERSON", 0, 4, 0.99)])
+    masker = Masker(pii=False, secrets=False, semantic_backend=backend)
+    masked, hits = masker.mask_text("John was here")
+    assert hits == 1 and "[[PERSON_1]]" in masked
+
+
+def test_masker_from_policy_loads_semantic_backend(monkeypatch):
+    import credshrike.semantic as semantic_mod
+    fake = FakeSemanticBackend([])
+    monkeypatch.setattr(semantic_mod, "get_backend", lambda **kw: fake)
+    policy = Policy()
+    policy.mask_semantic = True            # semantic alone enables masking
+    masker = Masker.from_policy(policy)
+    assert masker is not None and masker.semantic_backend is fake
+
+
+def test_token_windows_cover_whole_text():
+    text = " ".join(f"w{i}" for i in range(2000))
+    windows = list(token_windows(text, max_tokens=128, overlap=32))
+    assert len(windows) > 1
+    covered = set()
+    for offset, window in windows:
+        covered.update(range(offset, offset + len(window)))
+    assert covered == set(range(len(text)))
+    assert windows[0][0] == 0
+
+
+def test_token_windows_short_text_is_one_window():
+    assert list(token_windows("short text", 384, 64)) == [(0, "short text")]
+
+
+def test_semantic_backend_fails_closed_with_install_hint(monkeypatch):
+    import builtins
+    from credshrike.semantic import GlinerBackend
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "gliner" or name.startswith("gliner."):
+            raise ImportError("not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(RuntimeError, match="pip install"):
+        GlinerBackend().load()

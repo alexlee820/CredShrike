@@ -873,6 +873,7 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
         f"--redact '{','.join(policy.redact_literals)}'" if policy.redact_literals else "",
         "--mask-pii" if policy.mask_pii else "",
         "--mask-secrets" if policy.mask_secrets else "",
+        "--mask-semantic" if policy.mask_semantic else "",
         f"--skip-exts '{','.join(policy.dump_skip_exts[:6])}...'" if policy.dump_skip_exts else "",
         "--debug" if policy.debug else "",
     ]
@@ -890,6 +891,7 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
          (f" ({', '.join(policy.dump_skip_exts[:5])}...)" if policy.dump_skip_exts else " (none)"))
     echo(f" Read gate  : {policy.read_gate}")
     mask_types = [t for t, on in (("PII", policy.mask_pii),
+                                  ("semantic PII (GLiNER)", policy.mask_semantic),
                                   ("secrets", policy.mask_secrets)) if on]
     echo(f" Masking    : {', '.join(mask_types) if mask_types else 'off'}" +
          (f" → [[TYPE_N]] placeholders, {'restored' if policy.mask_restore else 'NOT restored'} in output"

@@ -313,6 +313,11 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.mask_pii = bool(params["mask_pii"])
     if "mask_secrets" in params:
         policy.mask_secrets = bool(params["mask_secrets"])
+    if "mask_semantic" in params:
+        policy.mask_semantic = bool(params["mask_semantic"])
+    if params.get("mask_semantic_model"):
+        policy.mask_semantic_model = params["mask_semantic_model"]
+        policy.mask_semantic = True
     if params.get("no_mask_restore"):
         policy.mask_restore = False
     if params.get("skip_exts"):

@@ -244,6 +244,26 @@ def _overlaps(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
     return any(not (end <= s or start >= e) for s, e in spans)
 
 
+def _subtract_overlaps(start: int, end: int,
+                       blockers: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Fragments of [start, end) not covered by any blocker (upstream's
+    semantic-vs-deterministic merge: deterministic spans win, the uncovered
+    parts of a fuzzy span remain eligible)."""
+    pieces = [(start, end)]
+    for bstart, bend in blockers:
+        remaining = []
+        for pstart, pend in pieces:
+            if bend <= pstart or bstart >= pend:
+                remaining.append((pstart, pend))
+                continue
+            if pstart < bstart:
+                remaining.append((pstart, bstart))
+            if bend < pend:
+                remaining.append((bend, pend))
+        pieces = remaining
+    return pieces
+
+
 # --------------------------------------------------------------------------- #
 # placeholder context
 # --------------------------------------------------------------------------- #
@@ -314,7 +334,9 @@ class Masker:
                  allowlist: Optional[list] = None,
                  denylist: Optional[list] = None,
                  marker_text: str = "[protected]",
-                 show_markers: bool = False) -> None:
+                 show_markers: bool = False,
+                 semantic_backend=None,
+                 semantic_threshold: float = 0.7) -> None:
         self.context = MaskContext()
         self.max_scan_chars = max(1000, int(max_scan_chars or 200_000))
         self.marker_text = marker_text
@@ -326,25 +348,47 @@ class Masker:
         if pii:
             detectors += _pii_detectors()
         self.detectors = detectors
+        # optional GLiNER layer (PERSON / LOCATION); deterministic detectors
+        # still win on overlap, exactly like upstream's merge
+        self.semantic_backend = semantic_backend
+        self.semantic_threshold = float(semantic_threshold)
 
     @classmethod
     def from_policy(cls, policy) -> Optional["Masker"]:
-        """Build the session masker, or None when masking is disabled."""
-        if not (getattr(policy, "mask_pii", False) or getattr(policy, "mask_secrets", False)):
+        """Build the session masker, or None when masking is disabled.
+        The semantic (GLiNER) backend is loaded EAGERLY when configured so a
+        missing package/model fails before any SMB traffic starts."""
+        pii = bool(getattr(policy, "mask_pii", False))
+        secrets = bool(getattr(policy, "mask_secrets", False))
+        semantic = bool(getattr(policy, "mask_semantic", False))
+        if not (pii or secrets or semantic):
             return None
+        backend = None
+        if semantic:
+            from .semantic import get_backend
+            backend = get_backend(
+                model_name=str(getattr(policy, "mask_semantic_model", "") or ""),
+                labels=list(getattr(policy, "mask_semantic_labels", []) or []),
+                threshold=float(getattr(policy, "mask_semantic_threshold", 0.7)),
+                floors=dict(getattr(policy, "mask_semantic_floors", {}) or {}),
+                max_tokens=int(getattr(policy, "mask_semantic_max_tokens", 384)),
+                overlap=int(getattr(policy, "mask_semantic_overlap", 64)),
+            )
         return cls(
-            pii=bool(policy.mask_pii), secrets=bool(policy.mask_secrets),
+            pii=pii, secrets=secrets,
             max_scan_chars=int(getattr(policy, "mask_max_scan_chars", 200_000)),
             allowlist=list(getattr(policy, "mask_allowlist", []) or []),
             denylist=list(getattr(policy, "mask_denylist", []) or []),
             marker_text=str(getattr(policy, "mask_marker_text", "[protected]")),
             show_markers=bool(getattr(policy, "mask_show_markers", False)),
+            semantic_backend=backend,
+            semantic_threshold=float(getattr(policy, "mask_semantic_threshold", 0.7)),
         )
 
     # ------------------------------------------------------------------ #
     def mask_text(self, text: str) -> tuple[str, int]:
         """Mask one string; returns (masked_text, values_masked)."""
-        if not text or not self.detectors:
+        if not text or (not self.detectors and self.semantic_backend is None):
             return text, 0
         allow_spans = self._allow_spans(text)
         pieces: list[str] = []
@@ -421,12 +465,48 @@ class Masker:
                 placeholder = self.context.placeholder_for(detector.entity, value, chunk)
                 accepted.append((start, end))
                 edits.append((start, end, placeholder))
+
+        if self.semantic_backend is not None:
+            edits.extend(self._semantic_edits(chunk, offset, allow_spans, accepted))
+
         if not edits:
             return chunk, 0
         # splice back-to-front so earlier offsets stay valid
         for start, end, placeholder in sorted(edits, reverse=True):
             chunk = chunk[:start] + placeholder + chunk[end:]
         return chunk, len(edits)
+
+    def _semantic_edits(self, chunk: str, offset: int,
+                        allow_spans: list[tuple[int, int]],
+                        accepted: list[tuple[int, int]]) -> list[tuple[int, int, str]]:
+        """GLiNER pass. Deterministic spans already in ``accepted`` win on
+        overlap; the uncovered fragments of a semantic span stay eligible
+        (upstream's _subtract_overlaps merge). Longest fragment first, then
+        higher score — same as upstream's fuzzy ordering."""
+        # NO exception swallowing: if semantic masking is configured and the
+        # backend fails, the run must stop rather than send unmasked content
+        spans = self.semantic_backend.detect(chunk, threshold=self.semantic_threshold)
+        candidates: list[tuple[int, float, int, int, str]] = []
+        for span in spans:
+            if not 0 <= span.start < span.end <= len(chunk):
+                continue
+            if _overlaps(span.start + offset, span.end + offset, allow_spans):
+                continue
+            for frag_start, frag_end in _subtract_overlaps(span.start, span.end, accepted):
+                if frag_end <= frag_start:
+                    continue
+                if _is_llm_marker(chunk[frag_start:frag_end]):
+                    continue
+                candidates.append((-(frag_end - frag_start), -span.score,
+                                   frag_start, frag_end, span.entity))
+        edits: list[tuple[int, int, str]] = []
+        for _neg_len, _neg_score, start, end, entity in sorted(candidates):
+            if _overlaps(start, end, accepted):
+                continue
+            placeholder = self.context.placeholder_for(entity, chunk[start:end], chunk)
+            accepted.append((start, end))
+            edits.append((start, end, placeholder))
+        return edits
 
 
 def _chunks(text: str, size: int):

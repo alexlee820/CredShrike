@@ -190,9 +190,10 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
   --mask-pii --mask-secrets
 ```
 
-| Group | Detected (deterministic check where the format allows) |
-|-------|--------------------------------------------------------|
-| PII | emails, IPv4/IPv6, phone numbers, credit cards (Luhn), IBANs (mod-97), EU VAT |
+| Group | Detected |
+|-------|----------|
+| PII (regex + checksums) | emails, IPv4/IPv6, phone numbers, credit cards (Luhn), IBANs (mod-97), EU VAT |
+| PII (semantic, optional) | **PERSON**, **LOCATION** (addresses included) via GLiNER |
 | Secrets | API keys (`sk-…`, AWS `AKIA…`, GitHub `ghp_…`), JWTs, bearer tokens, PEM/OpenSSH private keys, `*PASSWORD`/`*_SECRET` assignments, DB connection strings |
 
 - Identical values share one placeholder (`[[EMAIL_ADDRESS_1]]`), so the model
@@ -201,10 +202,36 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
   keeping context for the model's analysis.
 - `--no-mask-restore` leaves placeholders in the output (maximum privacy).
 - `mask_allowlist` / `mask_denylist` in the policy file handle names, codenames
-  and company-specific IDs (PasteGuard's GLiNER semantic backend is *not*
-  ported — it needs a model download).
+  and company-specific IDs.
 - Masking applies to every content path: share dumps in `full`/`full-domain`,
   and tool results for custom goals and `snaffler`.
+
+### Semantic backend (GLiNER)
+
+Regexes cannot see names or places. `--mask-semantic` adds PasteGuard's
+semantic layer — `urchade/gliner_multi_pii-v1`, labels `person`, `location`,
+`address` (address → `LOCATION`), per-label floors 0.99 / 0.80 / 0.80, 384-token
+windows with 64-token overlap:
+
+```bash
+pip install "credshrike[semantic]"      # pulls torch; ~a few hundred MB
+credshrike agent --preset full --host filesrv01 ... \
+  --mask-secrets --mask-semantic
+```
+
+- Deterministic detectors always win on overlap (a name span containing an
+  email leaves the email as `[[EMAIL_ADDRESS_1]]`); the uncovered fragments
+  of the semantic span are still masked, longest-first.
+- The model loads **once per process** and is shared by every share/batch
+  context. It is loaded eagerly when configured, and if it cannot load the run
+  **fails closed** — CredShrike will not send unmasked content.
+- CPU inference is slow (hundreds of ms per 384-token window), so a large
+  `--preset full` sweep takes noticeably longer; a GPU/`CUDA` torch install
+  helps.
+- Override the checkpoint with `--mask-semantic-model` (HF repo ID or local
+  path) or tune `mask_semantic_threshold` / `mask_semantic_floors` in policy.
+
+Standalone use (no SMB, no LLM): `credshrike mask --semantic < incident.log`.
 
 ---
 
