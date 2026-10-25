@@ -481,6 +481,7 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
              f"{len(batches)} request(s) ({[len(b) for b in batches]} files)")
 
     masked_total = 0
+    masked_entities: dict[str, int] = {}
     for i, batch in enumerate(batches, 1):
         # one fresh session per batch = one placeholder namespace per request
         share_session = AgentSession(credential, policy, audit, hosts=[host],
@@ -548,9 +549,10 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
         try:
             batch_findings = extract_findings(client_factory(), policy,
                                               loop.messages)
-            if masker is not None and policy.mask_restore:
+            if masker is not None:
                 from ..masking import restore_findings
-                restore_findings(batch_findings, masker)
+                restore_findings(batch_findings, masker,
+                                 restore_values=policy.mask_restore)
             for f in batch_findings:
                 f["host"] = host
                 f["share"] = share_name
@@ -568,6 +570,10 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
             report = f"#### Batch {i}/{len(batches)}\n{report}"
         reports.append(report)
 
+        if masker is not None:
+            for entity, count in masker.summary().items():
+                masked_entities[entity] = masked_entities.get(entity, 0) + count
+
         # rolling summary: carries THIS batch's findings to the next batch.
         # Generated from the MASKED report (what the model actually saw),
         # then restored — the next context re-masks it with its own namespace.
@@ -578,7 +584,8 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
                 batch_memory = masker.restore(batch_memory)
 
     return {"report": "\n\n".join(reports), "findings": findings,
-            "memory": batch_memory or memory, "masked": masked_total}
+            "memory": batch_memory or memory, "masked": masked_total,
+            "masked_entities": masked_entities}
 
 
 def _parse_checklist_paths(report_md: str) -> set[str]:
@@ -703,6 +710,11 @@ def merge_findings(all_findings: list[dict]) -> dict:
                 if _SEV_ORDER.get(entry["severity"], 0) > _SEV_ORDER.get(merged["severity"], 0):
                     merged["severity"] = entry["severity"]
                 merged["evidence"] = f"{merged['evidence']}; {entry['evidence']}"[:400]
+                if entry.get("masked"):
+                    merged["masked"] = True
+                merged["mask_entities"] = sorted(
+                    set(merged.get("mask_entities") or [])
+                    | set(entry.get("mask_entities") or []))
             else:
                 credentials[key] = entry
         else:
@@ -737,6 +749,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         all_skipped: list[dict] = []    # files seen but not read (ext filter)
         memory = ""    # rolling summary from previous shares
         masked_total = 0
+        masked_entities: dict[str, int] = {}
         total_dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
                             "bytes_read": 0, "errors": 0}
 
@@ -765,6 +778,8 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             share_report = result["report"]
             memory = result["memory"]
             masked_total += int(result.get("masked", 0))
+            for entity, count in result.get("masked_entities", {}).items():
+                masked_entities[entity] = masked_entities.get(entity, 0) + count
 
             all_reports.append(f"### {share_name}\n{share_report}")
             all_skipped.extend(skipped_ext)
@@ -782,11 +797,15 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
         red = session.credential.redacted()
         html_path = audit.path[:-len(".jsonl")] + ".report.html"
+        masking = ({"entities": masked_entities, "restored": policy.mask_restore}
+                   if (policy.mask_pii or policy.mask_secrets or policy.mask_semantic)
+                   else None)
         write_report(html_path,
                      context={"principal": red["principal"],
                               "auth_type": red["auth_type"], "scope": [host],
                               "model": policy.model,
                               "endpoint": policy.api_base_url or "api.anthropic.com"},
+                     masking=masking,
                      findings=all_findings, scan_results=session.scan_results,
                      flagged=session.flagged_files,
                      report_md=entry["report_md"],
@@ -800,6 +819,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         entry["html"] = os.path.basename(html_path)
         entry["status"] = "done"
         entry["masked"] = masked_total
+        entry["masked_entities"] = masked_entities
         if masked_total:
             echo(f"[mask] {host}: {masked_total} sensitive value(s) replaced with "
                  f"placeholders before leaving for the LLM (restored in the report)")
@@ -893,9 +913,14 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     mask_types = [t for t, on in (("PII", policy.mask_pii),
                                   ("semantic PII (GLiNER)", policy.mask_semantic),
                                   ("secrets", policy.mask_secrets)) if on]
-    echo(f" Masking    : {', '.join(mask_types) if mask_types else 'off'}" +
-         (f" → [[TYPE_N]] placeholders, {'restored' if policy.mask_restore else 'NOT restored'} in output"
-          if mask_types else ""))
+    if mask_types:
+        same = ", ".join(policy.mask_same_length or [])
+        style = (f"same-length surrogates for {same}" if same else "[[TYPE_N]] placeholders")
+        echo(f" Masking    : {', '.join(mask_types)} → {style}"
+             f"{' + [[TYPE_N]] for the rest' if same else ''}, "
+             f"{'restored' if policy.mask_restore else 'NOT restored'} in output")
+    else:
+        echo(" Masking    : off")
     echo(f" Context    : {policy.context_token_limit or 'off'}" +
          (f" (compact at {int(policy.compact_at_ratio * 100)}%)" if policy.context_token_limit else ""))
     echo(f" Budget     : {policy.max_tool_calls} calls / {policy.max_total_read_bytes // 1048576} MiB / {policy.wall_clock_seconds}s")

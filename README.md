@@ -205,8 +205,19 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
 | PII (semantic, optional) | **PERSON**, **LOCATION** (addresses included) via GLiNER |
 | Secrets | API keys (`sk-…`, AWS `AKIA…`, GitHub `ghp_…`), JWTs, bearer tokens, PEM/OpenSSH private keys, `*PASSWORD`/`*_SECRET` assignments, DB connection strings |
 
-- Identical values share one placeholder (`[[EMAIL_ADDRESS_1]]`), so the model
-  can still correlate occurrences.
+- **Same-length pseudonyms** for personal names and passwords (on by default):
+  `Alice Smith` → `Amber Scott` (initials, separators and case preserved),
+  `Winter2024!` → `Xkqmbn7314#` (same length, same character classes). Real
+  name dictionaries are indexed by length; uncovered lengths use a syllable
+  generator, and short/unsafe values fall back to `[[TYPE_N]]`. Configure with
+  `mask_same_length`, `mask_surrogate_style` (`name|syllable|masked`),
+  `mask_surrogate_keep_initials`, `mask_surrogate_min_len`, or
+  `--no-surrogates` / `--surrogate-style`.
+- Every finding that came back through masking is marked in the report with a
+  **🔒 PasteGuard** badge (Credentials and Findings tabs, and the domain index),
+  so you can tell restored values from values the model saw directly.
+- Identical values share one placeholder/surrogate, so the model can still
+  correlate occurrences.
 - Only the value is masked for assignments (`DB_PASSWORD=[[ENV_PASSWORD_1]]`),
   keeping context for the model's analysis.
 - `--no-mask-restore` leaves placeholders in the output (maximum privacy).

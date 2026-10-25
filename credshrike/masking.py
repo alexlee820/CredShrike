@@ -268,33 +268,62 @@ def _subtract_overlaps(start: int, end: int,
 # placeholder context
 # --------------------------------------------------------------------------- #
 class MaskContext:
-    """Placeholder <-> original mapping for one conversation/context window.
-    Thread-safe: tool results may be sanitized from worker threads."""
+    """Token <-> original mapping for one conversation/context window.
+    A token is either a ``[[TYPE_N]]`` placeholder or a same-length surrogate
+    (names/passwords). Thread-safe: tool results may come from worker threads."""
 
     def __init__(self) -> None:
-        self.mapping: dict[str, str] = {}     # placeholder -> original
-        self.reverse: dict[str, str] = {}     # original -> placeholder
+        self.mapping: dict[str, str] = {}     # token -> original
+        self.reverse: dict[str, str] = {}     # original -> token
+        self.entities: dict[str, str] = {}    # token -> entity type
+        self.surrogates: set[str] = set()     # tokens that are same-length
         self.counters: dict[str, int] = {}    # type -> last index
         self.hits: dict[str, int] = {}        # type -> distinct values masked
         self._lock = threading.Lock()
 
-    def placeholder_for(self, entity: str, value: str, text: str) -> str:
+    def token_for(self, entity: str, value: str, text: str,
+                  generator=None) -> str:
+        """Register and return the replacement for ``value``.
+
+        ``generator(value, entity, text, mapping)`` returns a same-length
+        surrogate or None; None falls back to a numbered placeholder."""
         with self._lock:
             existing = self.reverse.get(value)
             if existing:
                 return existing
-            while True:
-                n = self.counters.get(entity, 0) + 1
-                self.counters[entity] = n
-                placeholder = f"{PLACEHOLDER_OPEN}{entity}_{n}{PLACEHOLDER_CLOSE}"
-                # never collide with a placeholder that already exists in the
-                # source text (it would be restored to the wrong value)
-                if placeholder not in self.mapping and placeholder not in text:
-                    break
-            self.mapping[placeholder] = value
-            self.reverse[value] = placeholder
-            self.hits[entity] = self.hits.get(entity, 0) + 1
-            return placeholder
+            if generator is not None:
+                candidate = generator(value, entity, text, self.mapping)
+                if candidate:
+                    self.mapping[candidate] = value
+                    self.reverse[value] = candidate
+                    self.entities[candidate] = entity
+                    self.surrogates.add(candidate)
+                    self.hits[entity] = self.hits.get(entity, 0) + 1
+                    return candidate
+            return self._numbered(entity, value, text)
+
+    def _numbered(self, entity: str, value: str, text: str) -> str:
+        while True:
+            n = self.counters.get(entity, 0) + 1
+            self.counters[entity] = n
+            placeholder = f"{PLACEHOLDER_OPEN}{entity}_{n}{PLACEHOLDER_CLOSE}"
+            # never collide with a placeholder that already exists in the
+            # source text (it would be restored to the wrong value)
+            if placeholder not in self.mapping and placeholder not in text:
+                break
+        self.mapping[placeholder] = value
+        self.reverse[value] = placeholder
+        self.entities[placeholder] = entity
+        self.hits[entity] = self.hits.get(entity, 0) + 1
+        return placeholder
+
+    def entities_in(self, text: str) -> set[str]:
+        """Entity types whose token appears in ``text`` (check BEFORE restore)."""
+        found: set[str] = set()
+        for token in sorted(self.mapping, key=len, reverse=True):
+            if token in text:
+                found.add(self.entities.get(token, "MASKED"))
+        return found
 
     def restore(self, text: str, marker_text: str = "",
                 show_markers: bool = False) -> str:
@@ -336,7 +365,9 @@ class Masker:
                  marker_text: str = "[protected]",
                  show_markers: bool = False,
                  semantic_backend=None,
-                 semantic_threshold: float = 0.7) -> None:
+                 semantic_threshold: float = 0.7,
+                 same_length_entities: Optional[list] = None,
+                 surrogate_factory=None) -> None:
         self.context = MaskContext()
         self.max_scan_chars = max(1000, int(max_scan_chars or 200_000))
         self.marker_text = marker_text
@@ -352,6 +383,21 @@ class Masker:
         # still win on overlap, exactly like upstream's merge
         self.semantic_backend = semantic_backend
         self.semantic_threshold = float(semantic_threshold)
+        # same-length surrogates (names/passwords) instead of [[TYPE_N]]
+        if same_length_entities is None:
+            same_length_entities = ["PERSON", "ENV_PASSWORD"]
+        self.same_length_entities = {str(e).upper() for e in same_length_entities}
+        if self.same_length_entities and surrogate_factory is None:
+            from .surrogate import SurrogateFactory
+            surrogate_factory = SurrogateFactory()
+        self.surrogate_factory = surrogate_factory
+
+    def _generator_for(self, entity: str):
+        if self.surrogate_factory is None:
+            return None
+        if str(entity).upper() not in self.same_length_entities:
+            return None
+        return self.surrogate_factory.make
 
     @classmethod
     def from_policy(cls, policy) -> Optional["Masker"]:
@@ -374,6 +420,18 @@ class Masker:
                 max_tokens=int(getattr(policy, "mask_semantic_max_tokens", 384)),
                 overlap=int(getattr(policy, "mask_semantic_overlap", 64)),
             )
+        same_length = getattr(policy, "mask_same_length", None)
+        if same_length is None:
+            same_length = ["PERSON", "ENV_PASSWORD"]
+        surrogate_factory = None
+        if same_length:
+            from .surrogate import SurrogateFactory
+            surrogate_factory = SurrogateFactory(
+                style=str(getattr(policy, "mask_surrogate_style", "name")),
+                keep_initials=bool(getattr(policy,
+                                           "mask_surrogate_keep_initials", True)),
+                min_len=int(getattr(policy, "mask_surrogate_min_len", 4)),
+            )
         return cls(
             pii=pii, secrets=secrets,
             max_scan_chars=int(getattr(policy, "mask_max_scan_chars", 200_000)),
@@ -383,6 +441,8 @@ class Masker:
             show_markers=bool(getattr(policy, "mask_show_markers", False)),
             semantic_backend=backend,
             semantic_threshold=float(getattr(policy, "mask_semantic_threshold", 0.7)),
+            same_length_entities=list(same_length),
+            surrogate_factory=surrogate_factory,
         )
 
     # ------------------------------------------------------------------ #
@@ -414,6 +474,10 @@ class Masker:
 
     def summary(self) -> dict[str, int]:
         return self.context.summary()
+
+    def entities_in(self, text: str) -> set[str]:
+        """Entity types whose token appears in ``text`` (before restore)."""
+        return self.context.entities_in(text)
 
     # ------------------------------------------------------------------ #
     def _allow_spans(self, text: str) -> list[tuple[int, int]]:
@@ -462,7 +526,9 @@ class Masker:
                     continue
                 if _overlaps(start, end, accepted):
                     continue
-                placeholder = self.context.placeholder_for(detector.entity, value, chunk)
+                placeholder = self.context.token_for(
+                    detector.entity, value, chunk,
+                    self._generator_for(detector.entity))
                 accepted.append((start, end))
                 edits.append((start, end, placeholder))
 
@@ -503,7 +569,8 @@ class Masker:
         for _neg_len, _neg_score, start, end, entity in sorted(candidates):
             if _overlaps(start, end, accepted):
                 continue
-            placeholder = self.context.placeholder_for(entity, chunk[start:end], chunk)
+            placeholder = self.context.token_for(
+                entity, chunk[start:end], chunk, self._generator_for(entity))
             accepted.append((start, end))
             edits.append((start, end, placeholder))
         return edits
@@ -529,14 +596,26 @@ def _chunks(text: str, size: int):
 # --------------------------------------------------------------------------- #
 def restore_findings(findings: list[dict], masker: Optional[Masker],
                      fields: Iterable[str] = ("host", "share", "path", "username",
-                                              "secret", "evidence", "note")) -> list[dict]:
+                                              "secret", "evidence", "note"),
+                     restore_values: bool = True) -> list[dict]:
     """Put original values back into extracted findings (they were parsed
-    from a masked conversation, so secrets arrive as placeholders)."""
+    from a masked conversation, so secrets arrive as tokens), and mark which
+    findings actually came through PasteGuard masking (for the report).
+
+    ``restore_values=False`` (--no-mask-restore) keeps the tokens but still
+    marks the finding, so the report can show that it was masked."""
     if masker is None:
         return findings
     for finding in findings:
+        entities: set[str] = set()
         for field in fields:
             value = finding.get(field)
             if isinstance(value, str) and value:
-                finding[field] = masker.restore(value)
+                entities |= masker.entities_in(value)   # BEFORE restoring
+                if restore_values:
+                    finding[field] = masker.restore(value)
+        if entities:
+            finding["masked"] = True
+            finding["mask_entities"] = sorted(
+                set(finding.get("mask_entities") or []) | entities)
     return findings

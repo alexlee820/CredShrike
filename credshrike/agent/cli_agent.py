@@ -59,6 +59,10 @@ def _load_policy(args) -> Policy:
         policy.mask_semantic = True
     if getattr(args, "no_mask_restore", False):
         policy.mask_restore = False
+    if getattr(args, "no_surrogates", False):
+        policy.mask_same_length = []
+    if getattr(args, "surrogate_style", None):
+        policy.mask_surrogate_style = args.surrogate_style
     if getattr(args, "skip_exts", None) is not None:
         raw = args.skip_exts.strip().lower()
         if raw == "none" or raw == "":
@@ -121,7 +125,8 @@ def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> s
         findings = extract_findings(client, policy, loop.messages)
         # findings were parsed from a MASKED conversation — put values back
         # (unless the operator asked for placeholders to stay everywhere)
-        restore_findings(findings, session.masker if policy.mask_restore else None)
+        restore_findings(findings, session.masker,
+                         restore_values=policy.mask_restore)
     except Exception as exc:  # noqa: BLE001 - report must still build
         extraction_error = f"{type(exc).__name__}: {exc}"
     from ..report import write_report
@@ -131,6 +136,9 @@ def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> s
                  context={"principal": red["principal"], "auth_type": red["auth_type"],
                           "scope": session.allowed_hosts, "model": policy.model,
                           "endpoint": policy.api_base_url or "api.anthropic.com"},
+                 masking=({"entities": session.masker.summary(),
+                           "restored": policy.mask_restore}
+                          if session.masker is not None else None),
                  findings=findings, scan_results=session.scan_results,
                  flagged=session.flagged_files, report_md=report_md,
                  audit_path=audit.path, redactions=session.redactions_applied,
@@ -218,6 +226,7 @@ def cmd_agent(args) -> None:
                 print(f"[agent] {host}: {len(dumpable)} share(s) to analyze")
 
                 all_findings, all_reports, all_skipped = [], [], []
+                mask_entities: dict[str, int] = {}
                 memory = ""    # rolling summary across shares
                 for si, share_info in enumerate(dumpable, 1):
                     share_name = share_info["name"]
@@ -238,6 +247,8 @@ def cmd_agent(args) -> None:
                     memory = result["memory"]
                     all_reports.append(f"### {share_name}\n{result['report']}")
                     all_findings.extend(result["findings"])
+                    for entity, count in result.get("masked_entities", {}).items():
+                        mask_entities[entity] = mask_entities.get(entity, 0) + count
                     print(f"[share] {host}/{share_name}: "
                           f"{len(result['findings'])} finding(s)")
 
@@ -249,6 +260,10 @@ def cmd_agent(args) -> None:
                                       "auth_type": credential.redacted()["auth_type"],
                                       "scope": [host], "model": policy.model,
                                       "endpoint": policy.api_base_url or "api.anthropic.com"},
+                             masking=({"entities": mask_entities,
+                                       "restored": policy.mask_restore}
+                                      if (policy.mask_pii or policy.mask_secrets
+                                          or policy.mask_semantic) else None),
                              findings=all_findings,
                              scan_results=[], flagged=[],
                              report_md=report_md,
@@ -360,6 +375,13 @@ def register(subparsers) -> None:
     p.add_argument("--no-mask-restore", action="store_true",
                    help="leave [[TYPE_N]] placeholders in the output instead of "
                         "restoring the original values (maximum privacy)")
+    p.add_argument("--no-surrogates", action="store_true",
+                   help="do NOT use same-length pseudonyms for names/passwords; "
+                        "use [[TYPE_N]] placeholders for them too")
+    p.add_argument("--surrogate-style", choices=["name", "syllable", "masked"],
+                   default=None,
+                   help="name = real-name dictionaries (default), syllable = "
+                        "pronounceable filler, masked = Xxxx/0000")
     p.add_argument("--scan-patterns", default=None,
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")

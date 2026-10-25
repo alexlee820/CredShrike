@@ -105,7 +105,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                       transcript: Optional[list] = None,
                       debug_results: Optional[list] = None,
                       dump_stats: Optional[dict] = None,
-                      skipped_files: Optional[list] = None) -> str:
+                      skipped_files: Optional[list] = None,
+                      masking: Optional[dict] = None) -> str:
     audit = _read_audit(audit_path)
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
@@ -161,19 +162,37 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
         return sorted(items, key=lambda f: (_SEV_RANK.get(f.get("severity", "low"), 3),
                                             f.get("category", "")))
 
+    def _mask_cell(f):
+        """Was this finding restored from a PasteGuard token/surrogate?"""
+        if not f.get("masked"):
+            return "<td class='dim'>—</td>"
+        types = ", ".join(f.get("mask_entities") or []) or "masked"
+        return (f"<td><span class='pg' title='PasteGuard: shown to the LLM as a "
+                f"placeholder/surrogate, restored here'>🔒 {_esc(types)}</span></td>")
+
     creds_rows = "".join(
         f"<tr><td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
         f"<td>{_esc(f.get('username') or '—')}</td>{_secret_cell(f.get('secret'))}"
         f"<td class='path'>{_esc(f.get('host'))}/{_esc(f.get('share'))}/{_esc(f.get('path'))}</td>"
-        f"<td class='dim ev'>{_esc_cap(f.get('evidence'))}</td></tr>"
-        for f in _sort_findings(cred_findings)) or "<tr><td colspan='5' class='dim'>none</td></tr>"
+        f"<td class='dim ev'>{_esc_cap(f.get('evidence'))}</td>{_mask_cell(f)}</tr>"
+        for f in _sort_findings(cred_findings)) or "<tr><td colspan='6' class='dim'>none</td></tr>"
 
     findings_rows = "".join(
         f"<tr><td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
         f"<td>{_esc(f['category'])}</td>"
         f"<td class='path'>{_esc(f.get('host'))}/{_esc(f.get('share'))}/{_esc(f.get('path'))}</td>"
-        f"<td>{_esc_cap(f.get('note'))}</td><td class='dim ev'>{_esc_cap(f.get('evidence'))}</td></tr>"
-        for f in _sort_findings(findings)) or "<tr><td colspan='5' class='dim'>none</td></tr>"
+        f"<td>{_esc_cap(f.get('note'))}</td><td class='dim ev'>{_esc_cap(f.get('evidence'))}</td>"
+        f"{_mask_cell(f)}</tr>"
+        for f in _sort_findings(findings)) or "<tr><td colspan='6' class='dim'>none</td></tr>"
+
+    masking_note = ""
+    if masking is not None:
+        entities = masking.get("entities") or {}
+        detail = ", ".join(f"{_esc(k)} ×{v}" for k, v in sorted(entities.items())) \
+            or "no values masked"
+        restored = ("originals restored in this report" if masking.get("restored")
+                    else "tokens left in place (--no-mask-restore)")
+        masking_note = (f"<p class='dim'>🔒 PasteGuard masking: {detail} · {restored}</p>")
 
     hits_rows = "".join(
         f"<tr><td class='tier {h.get('tier')}'>{_esc(h.get('tier'))}</td>"
@@ -241,6 +260,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   .sev {{ padding:1px 8px; border-radius:9px; font-size:11px; font-weight:600; color:#101418; }}
   .sev.high {{ background:#ff6b6b; }} .sev.medium {{ background:#ffb84d; }}
   .sev.low {{ background:#4da3ff; }}
+  .pg {{ display:inline-block; padding:1px 7px; border-radius:9px; font-size:10px;
+         border:1px solid #2f6b4a; color:#8fd6a8; white-space:nowrap; }}
   .verdict {{ font-size:11px; padding:1px 7px; border-radius:8px; }}
   .verdict.allowed {{ background:#16351f; color:#43d17c; }}
   .verdict.capped {{ background:#3a2f16; color:#ffb84d; }}
@@ -319,17 +340,20 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
     {tile('tool calls', len(audit))}
   </div>
   {extraction_note}
+  {masking_note}
 </div>
 
 <div class="tab-panel" id="creds">
   <h2>Credentials (AI-confirmed — click "show" to reveal)</h2>
-  <table><tr><th>severity</th><th>username</th><th>secret</th><th>location</th><th>evidence</th></tr>
+  <table><tr><th>severity</th><th>username</th><th>secret</th><th>location</th><th>evidence</th>
+  <th>PasteGuard</th></tr>
   {creds_rows}</table>
 </div>
 
 <div class="tab-panel" id="findings">
   <h2>All findings</h2>
-  <table><tr><th>severity</th><th>category</th><th>location</th><th>note</th><th>evidence</th></tr>
+  <table><tr><th>severity</th><th>category</th><th>location</th><th>note</th><th>evidence</th>
+  <th>PasteGuard</th></tr>
   {findings_rows}</table>
 </div>
 
@@ -474,6 +498,12 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
         f"<td class='dim'>{_esc_cap(h.get('error', '') or '', 120)}</td></tr>"
         for h in hosts)
 
+    def _mask_cell(f):
+        if not f.get("masked"):
+            return "<td class='dim'>—</td>"
+        types = ", ".join(f.get("mask_entities") or []) or "masked"
+        return f"<td><span class='pg'>🔒 {_esc(types)}</span></td>"
+
     cred_rows = ""
     for f in _sort_creds(merged.get("credentials", [])):
         locations = "; ".join(f"{_esc(l['host'])}/{_esc(l['share'])}/{_esc(l['path'])}"
@@ -483,8 +513,9 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
                       f"<td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
                       f"<td>{_esc(f.get('username') or '—')}</td>{_secret_cell(f.get('secret'))}"
                       f"<td class='path'>{locations}</td>"
-                      f"<td class='dim ev'>{_esc(f.get('evidence', ''))}</td></tr>")
-    cred_rows = cred_rows or "<tr><td colspan='5' class='dim'>none</td></tr>"
+                      f"<td class='dim ev'>{_esc(f.get('evidence', ''))}</td>"
+                      f"{_mask_cell(f)}</tr>")
+    cred_rows = cred_rows or "<tr><td colspan='6' class='dim'>none</td></tr>"
 
     other_rows = "".join(
         f"<tr data-host=\"{_esc(f['locations'][0]['host'])}\">"
@@ -492,9 +523,9 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
         f"<td>{_esc(f['category'])}</td>"
         f"<td class='path'>{_esc(f['locations'][0]['host'])}/{_esc(f['locations'][0]['share'])}"
         f"/{_esc(f['locations'][0]['path'])}</td>"
-        f"<td>{_esc(f.get('note', ''))}</td></tr>"
+        f"<td>{_esc(f.get('note', ''))}</td>{_mask_cell(f)}</tr>"
         for f in merged.get("other", [])) or \
-        "<tr><td colspan='4' class='dim'>none</td></tr>"
+        "<tr><td colspan='5' class='dim'>none</td></tr>"
 
     def _summary_line(h: dict) -> str:
         link = (f" · <a href='{_esc(h['html'])}'>full report</a>"
@@ -529,9 +560,11 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
   td, th, pre, .path, .mono, .secret, .ev {{
       overflow-wrap:anywhere; word-break:break-word; max-width:520px; }}
   table {{ table-layout: fixed; }}
-  #credTable th:nth-child(1){{width:9%}} #credTable th:nth-child(2){{width:16%}}
-  #credTable th:nth-child(3){{width:20%}} #credTable th:nth-child(4){{width:35%}}
-  #credTable th:nth-child(5){{width:20%}}
+  #credTable th:nth-child(1){{width:8%}} #credTable th:nth-child(2){{width:15%}}
+  #credTable th:nth-child(3){{width:19%}} #credTable th:nth-child(4){{width:32%}}
+  #credTable th:nth-child(5){{width:16%}} #credTable th:nth-child(6){{width:10%}}
+  .pg {{ display:inline-block; padding:1px 7px; border-radius:9px; font-size:10px;
+         border:1px solid #2f6b4a; color:#8fd6a8; white-space:nowrap; }}
   tr:last-child td {{ border-bottom:0; }}
   .dim {{ color:var(--dim); }} .path {{ font-family:Consolas,monospace; font-size:12px; color:#b9d4f0; }}
   .ev {{ font-size:11px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
@@ -566,10 +599,11 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
   <option value="">all hosts</option>{host_options}
 </select>
 <table id="credTable"><tr><th>severity</th><th>username</th><th>secret</th>
-<th>locations</th><th>evidence</th></tr>{cred_rows}</table>
+<th>locations</th><th>evidence</th><th>PasteGuard</th></tr>{cred_rows}</table>
 
 <h2>Other findings</h2>
-<table><tr><th>severity</th><th>category</th><th>location</th><th>note</th></tr>{other_rows}</table>
+<table><tr><th>severity</th><th>category</th><th>location</th><th>note</th>
+<th>PasteGuard</th></tr>{other_rows}</table>
 
 <h2>Per-host AI reports</h2>
 {per_host_reports}

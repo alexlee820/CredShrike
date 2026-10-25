@@ -78,7 +78,11 @@ def test_env_password_masks_value_only():
     masker = _secret_masker()
     text = "DB_PASSWORD=Sup3rS3cret!"
     masked, _ = masker.mask_text(text)
-    assert masked == "DB_PASSWORD=[[ENV_PASSWORD_1]]"
+    # the assignment key stays visible; the value becomes a same-length
+    # password surrogate (PasteGuard-style), restored later
+    assert masked.startswith("DB_PASSWORD=")
+    value = masked.split("=", 1)[1]
+    assert len(value) == len("Sup3rS3cret!") and value != "Sup3rS3cret!"
     assert masker.restore(masked) == text
 
 
@@ -307,7 +311,12 @@ def test_semantic_masks_person_and_location():
                     semantic_threshold=0.7)
     masked, hits = masker.mask_text(text)
     assert hits == 3
-    assert masked == "[[PERSON_1]] met [[PERSON_2]] in [[LOCATION_1]]."
+    # PERSON -> same-length names (initials kept); LOCATION stays a placeholder
+    assert "Alice Smith" not in masked and "Bob Jones" not in masked
+    assert "Berlin" not in masked and "[[LOCATION_1]]" in masked
+    first = masked.split(" met ")[0]
+    assert len(first) == len("Alice Smith") and first != "Alice Smith"
+    assert first.split()[0][0] == "A"                    # initial preserved
     assert masker.restore(masked) == text
     assert backend.calls and backend.calls[0][1] == 0.7   # threshold forwarded
 
@@ -321,7 +330,7 @@ def test_deterministic_spans_win_over_semantic_overlap():
     # the email keeps its own placeholder; only the uncovered fragment is PERSON
     assert "[[EMAIL_ADDRESS_1]]" in masked
     assert "alice@corp.local" not in masked
-    assert "[[PERSON_1]]" in masked
+    assert "Alice" not in masked                  # PERSON fragment is a surrogate
     assert masker.restore(masked).startswith("Email Alice at alice@corp.local")
 
 
@@ -333,7 +342,7 @@ def test_semantic_longest_span_wins():
     ])
     masker = Masker(pii=False, secrets=False, semantic_backend=backend)
     masked, hits = masker.mask_text(text)
-    assert hits == 1 and masked == "[[PERSON_1]]"
+    assert hits == 1 and masked != "Alice Smith" and len(masked) == 11
     assert "LOCATION" not in masked
 
 
@@ -341,7 +350,9 @@ def test_semantic_backend_alone_is_enough():
     backend = FakeSemanticBackend([SemanticSpan("PERSON", 0, 4, 0.99)])
     masker = Masker(pii=False, secrets=False, semantic_backend=backend)
     masked, hits = masker.mask_text("John was here")
-    assert hits == 1 and "[[PERSON_1]]" in masked
+    assert hits == 1 and "John" not in masked
+    assert len(masked) == len("John was here")
+    assert masker.restore(masked) == "John was here"
 
 
 def test_masker_from_policy_loads_semantic_backend(monkeypatch):

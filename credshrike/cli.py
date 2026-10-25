@@ -175,8 +175,13 @@ def cmd_mask(args) -> None:
     if args.semantic or args.semantic_model:
         from .semantic import get_backend
         backend = get_backend(model_name=args.semantic_model or "")
+    same_length = [] if args.no_surrogates else ["PERSON", "ENV_PASSWORD"]
+    from .surrogate import SurrogateFactory
+    factory = SurrogateFactory(style=args.surrogate_style) if same_length else None
     masker = Masker(pii=pii, secrets=secrets, allowlist=allow, denylist=deny,
-                    semantic_backend=backend)
+                    semantic_backend=backend,
+                    same_length_entities=same_length,
+                    surrogate_factory=factory)
     masked, hits = masker.mask_text(text)
     sys.stdout.write(masked)
     if args.mapping:
@@ -208,6 +213,13 @@ def _register_mask(subparsers) -> None:
                         "needs `pip install gliner`, downloads the model once)")
     p.add_argument("--semantic-model", default=None, metavar="MODEL",
                    help="GLiNER checkpoint or local path (implies --semantic)")
+    p.add_argument("--no-surrogates", action="store_true",
+                   help="use [[TYPE_N]] placeholders for names/passwords too "
+                        "(default: same-length pseudonyms)")
+    p.add_argument("--surrogate-style", choices=["name", "syllable", "masked"],
+                   default="name",
+                   help="name = real-name dictionaries (default), syllable = "
+                        "pronounceable filler, masked = Xxxx/0000")
     p.add_argument("--mapping", metavar="PATH",
                    help="save the placeholder→value map as JSON (enables restore)")
     p.add_argument("--restore", metavar="MAPPING_JSON",

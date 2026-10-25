@@ -93,6 +93,14 @@ policy:
   mask_semantic_floors: {}        # per-label overrides: {person: 0.9}
   mask_semantic_max_tokens: 384   # window size (64-token overlap)
   mask_semantic_overlap: 64
+  # Same-length pseudonyms instead of [[TYPE_N]] for names/passwords.
+  # Alice Smith -> Amber Scott (initials kept), Winter2024! -> Xkqmbn7314#.
+  # Values shorter than min_len (or unsafe to substitute) use [[TYPE_N]].
+  # The report marks every restored finding with a PasteGuard badge.
+  mask_same_length: [PERSON, ENV_PASSWORD]
+  mask_surrogate_style: name      # name | syllable | masked
+  mask_surrogate_keep_initials: true
+  mask_surrogate_min_len: 4
 
   # --- snaffler-style sweep tool (smb_scan_share / --preset snaffler) ------
   scan_depth: 3                   # directory levels below the start path

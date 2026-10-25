@@ -65,6 +65,14 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "mask_semantic_floors": {},         # per-label overrides, e.g. {person: 0.9}
     "mask_semantic_max_tokens": 384,    # window size (64-token overlap)
     "mask_semantic_overlap": 64,
+    # --- same-length surrogates instead of [[TYPE_N]] for names/passwords --
+    # Alice Smith -> Amber Scott, Winter2024! -> Xkqmbn7314# (restored later;
+    # lengths and password character classes are preserved). Values that are
+    # too short or cannot be made collision-safe use [[TYPE_N]] instead.
+    "mask_same_length": ["PERSON", "ENV_PASSWORD"],
+    "mask_surrogate_style": "name",        # name | syllable | masked
+    "mask_surrogate_keep_initials": True,  # Alice -> Amber (A kept)
+    "mask_surrogate_min_len": 4,           # shorter values -> [[TYPE_N]]
     # --- snaffler-style scan tool (smb_scan_share) --------------------------
     "scan_depth": 3,
     "scan_max_files": 200,              # candidates opened per sweep
@@ -148,6 +156,11 @@ class Policy:
     mask_semantic_floors: dict = field(default_factory=dict)
     mask_semantic_max_tokens: int = DEFAULT_POLICY_DICT["mask_semantic_max_tokens"]
     mask_semantic_overlap: int = DEFAULT_POLICY_DICT["mask_semantic_overlap"]
+    mask_same_length: list = field(
+        default_factory=lambda: list(DEFAULT_POLICY_DICT["mask_same_length"]))
+    mask_surrogate_style: str = DEFAULT_POLICY_DICT["mask_surrogate_style"]
+    mask_surrogate_keep_initials: bool = DEFAULT_POLICY_DICT["mask_surrogate_keep_initials"]
+    mask_surrogate_min_len: int = DEFAULT_POLICY_DICT["mask_surrogate_min_len"]
     scan_depth: int = DEFAULT_POLICY_DICT["scan_depth"]
     scan_max_files: int = DEFAULT_POLICY_DICT["scan_max_files"]
     scan_max_file_bytes: int = DEFAULT_POLICY_DICT["scan_max_file_bytes"]

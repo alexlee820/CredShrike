@@ -171,6 +171,18 @@
           downloads the model on first use (slow)</label>
       </div>
       <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="useSurrogates" style="width:auto" checked/>
+        <label style="margin:0" for="useSurrogates">Same-length pseudonyms for names &amp;
+          passwords (e.g. <code>Amber Scott</code>, <code>Xkqmbn7314#</code>) instead
+          of visible placeholders — restored in the report</label>
+      </div>
+      <div class="field"><label>Pseudonym style</label>
+        <select id="surrogateStyle">
+          <option value="name" selected>name — real-looking names (initials kept)</option>
+          <option value="syllable">syllable — pronounceable filler</option>
+          <option value="masked">masked — Xxxx / 0000</option>
+        </select></div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
         <input type="checkbox" id="noMaskRestore" style="width:auto"/>
         <label style="margin:0" for="noMaskRestore">Do NOT restore masked values in the
           output (maximum privacy — placeholders stay in the report)</label>
@@ -289,6 +301,8 @@ $('startBtn').onclick = async () => {
     mask_pii: $('maskPii').checked,
     mask_secrets: $('maskSecrets').checked,
     mask_semantic: $('maskSemantic').checked,
+    use_surrogates: $('useSurrogates').checked,
+    surrogate_style: $('surrogateStyle').value,
     no_mask_restore: $('noMaskRestore').checked,
     context_limit: $('contextLimit').value || 0,
     computers_filter: $('computersFilter').value.trim(),

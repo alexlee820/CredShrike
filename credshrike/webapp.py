@@ -227,7 +227,8 @@ def _emit_report(loop, session, policy, audit, client, report_md: str) -> str:
     findings, extraction_error = [], ""
     try:
         findings = extract_findings(client, policy, loop.messages)
-        restore_findings(findings, session.masker if policy.mask_restore else None)
+        restore_findings(findings, session.masker,
+                         restore_values=policy.mask_restore)
     except Exception as exc:  # noqa: BLE001 - report must still build
         extraction_error = f"{type(exc).__name__}: {exc}"
     from .report import write_report
@@ -237,6 +238,9 @@ def _emit_report(loop, session, policy, audit, client, report_md: str) -> str:
                  context={"principal": red["principal"], "auth_type": red["auth_type"],
                           "scope": session.allowed_hosts, "model": policy.model,
                           "endpoint": policy.api_base_url or "api.anthropic.com"},
+                 masking=({"entities": session.masker.summary(),
+                           "restored": policy.mask_restore}
+                          if session.masker is not None else None),
                  findings=findings, scan_results=session.scan_results,
                  flagged=session.flagged_files, report_md=report_md,
                  audit_path=audit.path, redactions=session.redactions_applied,
@@ -317,6 +321,11 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.mask_secrets = bool(params["mask_secrets"])
     if "mask_semantic" in params:
         policy.mask_semantic = bool(params["mask_semantic"])
+    if "use_surrogates" in params:
+        policy.mask_same_length = (["PERSON", "ENV_PASSWORD"]
+                                   if params["use_surrogates"] else [])
+    if params.get("surrogate_style"):
+        policy.mask_surrogate_style = params["surrogate_style"]
     if params.get("mask_semantic_model"):
         policy.mask_semantic_model = params["mask_semantic_model"]
         policy.mask_semantic = True
