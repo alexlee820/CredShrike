@@ -320,3 +320,14 @@ def test_port_bumps_when_occupied():
         assert _find_free_port("127.0.0.1", port + 100) == port + 100
     finally:
         blocker.close()
+
+
+def test_index_aliases_and_favicon(client):
+    """/index.html, /ui etc. are what people type by habit — they must land on
+    the UI instead of Flask's bare 404 (only / was routed)."""
+    assert client.get("/").status_code == 200
+    for path in ("/index.html", "/index.htm", "/ui", "/ui/"):
+        r = client.get(path)
+        assert r.status_code in (301, 302, 308), path
+        assert r.headers["Location"].endswith("/"), path
+    assert client.get("/favicon.ico").status_code == 204

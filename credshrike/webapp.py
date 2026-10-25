@@ -21,7 +21,7 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory
 
 from .agent.audit import AuditLog
 from .agent.loop import AgentLoop
@@ -337,7 +337,26 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
 # --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
+    if not (WEB_DIR / "index.html").is_file():
+        return ("CredShrike UI asset missing: credshrike/web/index.html was not "
+                "installed with the package. Reinstall the project "
+                "(pip install -e .) or run from the repository root.", 500,
+                {"Content-Type": "text/plain; charset=utf-8"})
     return send_from_directory(WEB_DIR, "index.html")
+
+
+# the UI only lives at "/" — these are the URLs people type by habit
+@app.route("/index.html")
+@app.route("/index.htm")
+@app.route("/ui")
+@app.route("/ui/")
+def index_alias():
+    return redirect("/", code=302)
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
 
 
 @app.route("/api/runs", methods=["POST"])
