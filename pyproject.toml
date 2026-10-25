@@ -9,15 +9,18 @@ description = "Multi-auth SMB enumeration toolkit with LDAP/ADWS domain queries 
 requires-python = ">=3.10"
 dependencies = [
     "impacket>=0.10.0",
-    "ldap3>=2.9",
     "pycryptodomex>=3.19",   # vendored ADWS NegotiateStream (ARC4/HMAC sealing)
+    "pyasn1>=0.5",           # ADWS binary XML / NMF encoding
     "PyYAML>=6.0",
     "dnspython>=2.4",
     "anthropic>=0.100",
+    "Flask>=2.3",            # `credshrike ui`
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# libphonenumber + stdnum checksums for the masking detectors
+pii = ["phonenumbers>=8.13", "python-stdnum>=1.20"]
 # semantic PII masks (PERSON/LOCATION) — pulls torch; model downloads on first use
 semantic = ["gliner>=0.2.27,<0.3"]
 

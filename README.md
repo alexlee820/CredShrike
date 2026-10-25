@@ -99,9 +99,17 @@ to call.
 ### Install & Test
 
 ```bash
-pip install -e .[dev]
-pytest                # 128 offline tests
+# Option A — plain requirements file (core + masking validators)
+pip install -r requirements.txt
+
+# Option B — as a package, with extras
+pip install -e ".[dev,pii]"      # tests + phonenumbers/stdnum checksums
+pip install -e ".[semantic]"     # optional GLiNER semantic masks (pulls torch)
+
+pytest                           # 158 offline tests
 ```
+
+`credshrike ui` additionally needs Flask (it is in the core set above).
 
 ### Full-Domain Sweep (default)
 

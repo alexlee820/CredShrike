@@ -3,7 +3,7 @@
 The :class:`Credential` is pure data plus small helpers. Protocol-specific
 materialization lives next to each consumer (``smb_session``,
 ``domain.ldap_source``, ``domain.adws_source``) so the model itself never
-imports impacket/ldap3 — which keeps it trivially testable.
+imports impacket — which keeps it trivially testable.
 
 Secrets hygiene: ``redacted()`` is the ONLY representation of a credential
 that may appear in logs, audit files or LLM context.
