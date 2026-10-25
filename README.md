@@ -178,7 +178,7 @@ credshrike domain computers --dc DC01 --source adws --user u --domain d --passwo
 | **Budgets** | Per-run limits (100 tool calls, 10 MiB read, 30 min wall clock) |
 | **Read gate** | `--read-gate size` flags oversize files instead of reading them |
 | **Redaction** | `--redact 'codename,IP'` masks values BEFORE they reach the LLM |
-| **PII/secrets masking** | `--mask-pii --mask-secrets` — PasteGuard-style placeholders, restored in the report |
+| **PII/secrets masking** | `--mask-pii --mask-secrets` — PasteGuard-style pseudonyms/placeholders, restored in the report |
 | **Audit** | JSONL log of every tool call (redacted args, verdicts, timing) |
 | **Context mgmt** | Auto-compaction at 75% of context window; overflow self-heal |
 | **Streaming** | SSE token stream (live output, same result/cost); auto-fallback if the endpoint rejects it |
@@ -189,9 +189,10 @@ credshrike domain computers --dc DC01 --source adws --user u --domain d --passwo
 
 A Python port of the `mask` half of
 [sgasser/pasteguard](https://github.com/sgasser/pasteguard) sits on the LLM
-boundary: detected PII and secrets are replaced with `[[TYPE_N]]` placeholders
-before content reaches the provider, then restored in the model's output — so
-the harness still produces a report with the real evidence, but a cloud or
+boundary: detected PII and secrets are replaced before content reaches the
+provider — same-length pseudonyms for names/passwords, `[[TYPE_N]]`
+placeholders for structured values — then restored in the model's output, so
+the harness still produces a report with the real evidence but a cloud or
 local model never receives the values.
 
 ```bash
@@ -218,8 +219,10 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
   so you can tell restored values from values the model saw directly.
 - Identical values share one placeholder/surrogate, so the model can still
   correlate occurrences.
-- Only the value is masked for assignments (`DB_PASSWORD=[[ENV_PASSWORD_1]]`),
-  keeping context for the model's analysis.
+- Only the value is masked for assignments (`DB_PASSWORD=Xkqmbn7314#`), keeping
+  context for the model's analysis. Passwords/names use the same-length form by
+  default; `[[ENV_PASSWORD_1]]` only appears with `--no-surrogates` or when a
+  value cannot be substituted safely.
 - `--no-mask-restore` leaves placeholders in the output (maximum privacy).
 - `mask_allowlist` / `mask_denylist` in the policy file handle names, codenames
   and company-specific IDs.
