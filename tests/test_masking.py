@@ -29,9 +29,10 @@ def test_email_ip_and_card_are_masked_then_restored():
     masked, hits = masker.mask_text(text)
     assert hits == 3
     assert "alice.smith@example.com" not in masked
+    assert "example.com" not in masked                 # domain normalised
+    assert "@corp.local" in masked                     # realistic email shape
     assert "10.1.2.3" not in masked
     assert "4111 1111 1111 1111" not in masked
-    assert "[[EMAIL_ADDRESS_1]]" in masked
     assert "[[IP_ADDRESS_1]]" in masked
     assert "[[CREDIT_CARD_1]]" in masked
     assert masker.restore(masked) == text
@@ -273,7 +274,7 @@ def test_mask_cli_roundtrip(tmp_path, capsys):
     assert main(["mask", str(source), "--mapping", str(mapping)]) == 0
     masked = capsys.readouterr().out
     assert "alice@corp.local" not in masked and AWS_KEY not in masked
-    assert "[[EMAIL_ADDRESS_1]]" in masked and "[[API_KEY_AWS_1]]" in masked
+    assert "@corp.local" in masked and "[[API_KEY_AWS_1]]" in masked
 
     masked_file = tmp_path / "masked.txt"
     masked_file.write_text(masked, encoding="utf-8")
@@ -327,9 +328,9 @@ def test_deterministic_spans_win_over_semantic_overlap():
     backend = FakeSemanticBackend([SemanticSpan("PERSON", 6, 31, 0.99)])
     masker = Masker(pii=True, secrets=False, semantic_backend=backend)
     masked, _ = masker.mask_text(text)
-    # the email keeps its own placeholder; only the uncovered fragment is PERSON
-    assert "[[EMAIL_ADDRESS_1]]" in masked
+    # the email becomes a realistic address; only the uncovered fragment is PERSON
     assert "alice@corp.local" not in masked
+    assert "@corp.local" in masked
     assert "Alice" not in masked                  # PERSON fragment is a surrogate
     assert masker.restore(masked).startswith("Email Alice at alice@corp.local")
 

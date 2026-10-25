@@ -145,6 +145,21 @@ class Detector:
 
 _EMAIL_RE = re.compile(
     r"(?<![\w.%+\-@])[\w%+\-]+(?:\.[\w%+\-]+)*@(?:[\w\-]+\.)+[^\W\d_]{2,}(?![\w\-])")
+# account names: config/JSON keys, DOMAIN\user, and Windows/Unix profile paths
+_USERNAME_KEY_RE = re.compile(
+    r"""["']?(?:username|user_name|samaccountname|sam_account|accountname|account_name|login_name)"""
+    r"""["']?\s*[:=]\s*["']?([A-Za-z0-9._$-]{2,64})(?=["'\s,;]|$)""",
+    re.IGNORECASE)
+_USERNAME_DOMAIN_RE = re.compile(
+    r"(?<![A-Za-z0-9._-])([A-Z][A-Z0-9-]{1,30}|[A-Za-z0-9-]+\.[A-Za-z]{2,})"
+    r"\\([A-Za-z0-9._$-]{1,64})")
+_USERNAME_PATH_RE = re.compile(
+    r"(?i)(?:[A-Za-z]:[\\/]Users|/home|/Users)[\\/]([A-Za-z0-9._$-]{2,64})")
+_BUILTIN_PROFILES = {"public", "default", "default user", "all users", "shared"}
+
+
+def _not_builtin_profile(value: str) -> bool:
+    return value.strip().lower() not in _BUILTIN_PROFILES
 _IPV4_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w])(?!\.\d)")
 _IPV6_RE = re.compile(r"(?<![\w:.])[0-9A-Fa-f.:]{2,45}(?![\w:.])")
 _IBAN_RE = re.compile(
@@ -185,6 +200,11 @@ _CONN_RE = re.compile(
 def _pii_detectors() -> list[Detector]:
     detectors = [
         Detector("EMAIL_ADDRESS", _EMAIL_RE, kind="pii"),
+        Detector("USERNAME", _USERNAME_KEY_RE, group=1, kind="pii",
+                 validate=_not_builtin_profile),
+        Detector("USERNAME", _USERNAME_DOMAIN_RE, group=2, kind="pii"),
+        Detector("USERNAME", _USERNAME_PATH_RE, group=1, kind="pii",
+                 validate=_not_builtin_profile),
         Detector("IP_ADDRESS", _IPV6_RE, validate=_ipv6_valid, kind="pii"),
         Detector("IP_ADDRESS", _IPV4_RE, validate=_ipv4_valid, kind="pii"),
         Detector("IBAN_CODE", _IBAN_RE, validate=_iban_valid, kind="pii",
@@ -365,7 +385,7 @@ class Masker:
                  marker_text: str = "[protected]",
                  show_markers: bool = False,
                  semantic_backend=None,
-                 semantic_threshold: float = 0.7,
+                 semantic_threshold: float = 0.5,
                  same_length_entities: Optional[list] = None,
                  surrogate_factory=None) -> None:
         self.context = MaskContext()
@@ -383,9 +403,11 @@ class Masker:
         # still win on overlap, exactly like upstream's merge
         self.semantic_backend = semantic_backend
         self.semantic_threshold = float(semantic_threshold)
-        # same-length surrogates (names/passwords) instead of [[TYPE_N]]
+        # same-length surrogates (names/passwords/usernames/emails) instead
+        # of [[TYPE_N]]
         if same_length_entities is None:
-            same_length_entities = ["PERSON", "ENV_PASSWORD"]
+            same_length_entities = ["PERSON", "ENV_PASSWORD",
+                                    "USERNAME", "EMAIL_ADDRESS"]
         self.same_length_entities = {str(e).upper() for e in same_length_entities}
         if self.same_length_entities and surrogate_factory is None:
             from .surrogate import SurrogateFactory
@@ -415,14 +437,14 @@ class Masker:
             backend = get_backend(
                 model_name=str(getattr(policy, "mask_semantic_model", "") or ""),
                 labels=list(getattr(policy, "mask_semantic_labels", []) or []),
-                threshold=float(getattr(policy, "mask_semantic_threshold", 0.7)),
+                threshold=float(getattr(policy, "mask_semantic_threshold", 0.5)),
                 floors=dict(getattr(policy, "mask_semantic_floors", {}) or {}),
                 max_tokens=int(getattr(policy, "mask_semantic_max_tokens", 384)),
                 overlap=int(getattr(policy, "mask_semantic_overlap", 64)),
             )
         same_length = getattr(policy, "mask_same_length", None)
         if same_length is None:
-            same_length = ["PERSON", "ENV_PASSWORD"]
+            same_length = ["PERSON", "ENV_PASSWORD", "USERNAME", "EMAIL_ADDRESS"]
         surrogate_factory = None
         if same_length:
             from .surrogate import SurrogateFactory
@@ -431,6 +453,7 @@ class Masker:
                 keep_initials=bool(getattr(policy,
                                            "mask_surrogate_keep_initials", True)),
                 min_len=int(getattr(policy, "mask_surrogate_min_len", 4)),
+                email_domain=str(getattr(policy, "mask_email_domain", "corp.local")),
             )
         return cls(
             pii=pii, secrets=secrets,
@@ -440,7 +463,7 @@ class Masker:
             marker_text=str(getattr(policy, "mask_marker_text", "[protected]")),
             show_markers=bool(getattr(policy, "mask_show_markers", False)),
             semantic_backend=backend,
-            semantic_threshold=float(getattr(policy, "mask_semantic_threshold", 0.7)),
+            semantic_threshold=float(getattr(policy, "mask_semantic_threshold", 0.5)),
             same_length_entities=list(same_length),
             surrogate_factory=surrogate_factory,
         )

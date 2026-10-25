@@ -326,6 +326,8 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
                                    if params["use_surrogates"] else [])
     if params.get("surrogate_style"):
         policy.mask_surrogate_style = params["surrogate_style"]
+    if params.get("mask_email_domain"):
+        policy.mask_email_domain = params["mask_email_domain"]
     if params.get("mask_semantic_model"):
         policy.mask_semantic_model = params["mask_semantic_model"]
         policy.mask_semantic = True

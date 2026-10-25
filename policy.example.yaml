@@ -88,7 +88,7 @@ policy:
   # CPU inference is slow on large dumps. Fails closed if it cannot load.
   mask_semantic: false            # CLI: --mask-semantic
   mask_semantic_model: urchade/gliner_multi_pii-v1   # HF repo ID or local path
-  mask_semantic_threshold: 0.7    # call-level floor (person .99, location/address .80)
+  mask_semantic_threshold: 0.5    # global floor (per-label: person .90, location .65, address .70)
   mask_semantic_labels: [person, location, address]  # address maps to LOCATION
   mask_semantic_floors: {}        # per-label overrides: {person: 0.9}
   mask_semantic_max_tokens: 384   # window size (64-token overlap)
@@ -97,7 +97,11 @@ policy:
   # Alice Smith -> Amber Scott (initials kept), Winter2024! -> Xkqmbn7314#.
   # Values shorter than min_len (or unsafe to substitute) use [[TYPE_N]].
   # The report marks every restored finding with a PasteGuard badge.
-  mask_same_length: [PERSON, ENV_PASSWORD]
+  # PERSON + ENV_PASSWORD: names/passwords.
+  # USERNAME: DOMAIN\user, username:/sam_account keys, C:\Users\... paths
+  # EMAIL_ADDRESS: local part pseudonymised, domain normalised to corp.local
+  mask_same_length: [PERSON, ENV_PASSWORD, USERNAME, EMAIL_ADDRESS]
+  mask_email_domain: corp.local   # jchen@hackaday.lab -> kford@corp.local
   mask_surrogate_style: name      # name | syllable | masked
   mask_surrogate_keep_initials: true
   mask_surrogate_min_len: 4

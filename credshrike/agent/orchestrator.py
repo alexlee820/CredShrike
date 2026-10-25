@@ -916,6 +916,8 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     if mask_types:
         same = ", ".join(policy.mask_same_length or [])
         style = (f"same-length surrogates for {same}" if same else "[[TYPE_N]] placeholders")
+        if same and "EMAIL_ADDRESS" in {s.upper() for s in policy.mask_same_length}:
+            style += f" (email domain → {policy.mask_email_domain})"
         echo(f" Masking    : {', '.join(mask_types)} → {style}"
              f"{' + [[TYPE_N]] for the rest' if same else ''}, "
              f"{'restored' if policy.mask_restore else 'NOT restored'} in output")

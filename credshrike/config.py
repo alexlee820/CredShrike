@@ -58,9 +58,9 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # use. Deterministic detectors still win on overlap.
     "mask_semantic": False,
     "mask_semantic_model": "urchade/gliner_multi_pii-v1",
-    "mask_semantic_threshold": 0.7,     # call-level floor (can only RAISE
-                                        # the per-label floors: person .99,
-                                        # location/address .80)
+    "mask_semantic_threshold": 0.5,     # global floor (can only RAISE the
+                                        # per-label floors: person .90,
+                                        # location .65, address .70)
     "mask_semantic_labels": ["person", "location", "address"],
     "mask_semantic_floors": {},         # per-label overrides, e.g. {person: 0.9}
     "mask_semantic_max_tokens": 384,    # window size (64-token overlap)
@@ -69,10 +69,11 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # Alice Smith -> Amber Scott, Winter2024! -> Xkqmbn7314# (restored later;
     # lengths and password character classes are preserved). Values that are
     # too short or cannot be made collision-safe use [[TYPE_N]] instead.
-    "mask_same_length": ["PERSON", "ENV_PASSWORD"],
+    "mask_same_length": ["PERSON", "ENV_PASSWORD", "USERNAME", "EMAIL_ADDRESS"],
     "mask_surrogate_style": "name",        # name | syllable | masked
     "mask_surrogate_keep_initials": True,  # Alice -> Amber (A kept)
     "mask_surrogate_min_len": 4,           # shorter values -> [[TYPE_N]]
+    "mask_email_domain": "corp.local",     # jchen@hackaday.lab -> kford@corp.local
     # --- snaffler-style scan tool (smb_scan_share) --------------------------
     "scan_depth": 3,
     "scan_max_files": 200,              # candidates opened per sweep
@@ -161,6 +162,7 @@ class Policy:
     mask_surrogate_style: str = DEFAULT_POLICY_DICT["mask_surrogate_style"]
     mask_surrogate_keep_initials: bool = DEFAULT_POLICY_DICT["mask_surrogate_keep_initials"]
     mask_surrogate_min_len: int = DEFAULT_POLICY_DICT["mask_surrogate_min_len"]
+    mask_email_domain: str = DEFAULT_POLICY_DICT["mask_email_domain"]
     scan_depth: int = DEFAULT_POLICY_DICT["scan_depth"]
     scan_max_files: int = DEFAULT_POLICY_DICT["scan_max_files"]
     scan_max_file_bytes: int = DEFAULT_POLICY_DICT["scan_max_file_bytes"]

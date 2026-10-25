@@ -37,6 +37,20 @@ class Refused(Exception):
     """Raised internally for guard violations; converted to tool_result."""
 
 
+def _restore_args(obj: Any, masker) -> Any:
+    """Map privacy tokens back to real values in TOOL ARGUMENTS before the
+    handler runs. The model only ever saw ``kford``/``kford@corp.local``;
+    without this, a path it builds from a masked listing would not exist.
+    The audit log still records the model's original (masked) arguments."""
+    if isinstance(obj, dict):
+        return {key: _restore_args(value, masker) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_restore_args(value, masker) for value in obj]
+    if isinstance(obj, str):
+        return masker.restore(obj)
+    return obj
+
+
 def normalize_path(path: str) -> str:
     """Accept '/' or '\\' separated paths, reject traversal segments."""
     p = (path or "").replace("\\", "/").strip()
@@ -106,6 +120,11 @@ class ToolExecutor:
         # strict schema validation is done API-side; we still coerce defensively
         if not isinstance(args, dict):
             raise Refused("arguments must be an object")
+
+        # the model only saw masked content — map tokens back before scope/
+        # path checks and execution (audit still logs the model's own args)
+        if self.session.masker is not None:
+            args = _restore_args(args, self.session.masker)
 
         # budget
         if self.session.budget.exhausted:

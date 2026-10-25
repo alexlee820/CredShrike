@@ -175,9 +175,12 @@ def cmd_mask(args) -> None:
     if args.semantic or args.semantic_model:
         from .semantic import get_backend
         backend = get_backend(model_name=args.semantic_model or "")
-    same_length = [] if args.no_surrogates else ["PERSON", "ENV_PASSWORD"]
+    same_length = ([] if args.no_surrogates
+                   else ["PERSON", "ENV_PASSWORD", "USERNAME", "EMAIL_ADDRESS"])
     from .surrogate import SurrogateFactory
-    factory = SurrogateFactory(style=args.surrogate_style) if same_length else None
+    factory = (SurrogateFactory(style=args.surrogate_style,
+                                email_domain=args.email_domain)
+               if same_length else None)
     masker = Masker(pii=pii, secrets=secrets, allowlist=allow, denylist=deny,
                     semantic_backend=backend,
                     same_length_entities=same_length,
@@ -220,6 +223,9 @@ def _register_mask(subparsers) -> None:
                    default="name",
                    help="name = real-name dictionaries (default), syllable = "
                         "pronounceable filler, masked = Xxxx/0000")
+    p.add_argument("--email-domain", default="corp.local",
+                   help="domain used for masked email/UPN addresses "
+                        "(default corp.local)")
     p.add_argument("--mapping", metavar="PATH",
                    help="save the placeholder→value map as JSON (enables restore)")
     p.add_argument("--restore", metavar="MAPPING_JSON",

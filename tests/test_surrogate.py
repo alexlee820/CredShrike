@@ -155,3 +155,73 @@ def test_report_marks_pasteguard_in_credentials_and_findings(tmp_path):
     assert "PasteGuard" in html
     assert "🔒" in html and "ENV_PASSWORD" in html
     assert "originals restored" in html
+
+
+# --------------------------------------------------------------------------- #
+# usernames and emails
+# --------------------------------------------------------------------------- #
+from credshrike.surrogate import email_surrogate, username_surrogate  # noqa: E402
+
+
+@pytest.mark.parametrize("name", ["jchen", "backup", "j.smith", "user01", "ADMIN"])
+def test_username_same_length_and_realistic(name):
+    out = username_surrogate(name, random.Random(7))
+    assert out and len(out) == len(name) and out.lower() != name.lower()
+    assert [c.isdigit() for c in out] == [c.isdigit() for c in name]
+
+
+def test_username_preserves_prefix_machine_suffix_and_separators():
+    out = username_surrogate("svc-backup", random.Random(3))
+    assert out.startswith("svc-") and len(out) == len("svc-backup")
+    out = username_surrogate("FS01$", random.Random(3))
+    assert out.endswith("$") and len(out) == len("FS01$")
+    out = username_surrogate("j.smith", random.Random(3))
+    assert out.index(".") == 1 and len(out) == len("j.smith")
+
+
+def test_email_surrogate_normalises_domain():
+    out = email_surrogate("jchen@hackaday.lab", random.Random(5), "corp.local")
+    assert out.endswith("@corp.local")
+    local = out.split("@")[0]
+    assert local != "jchen" and len(local) == len("jchen")
+
+
+def test_username_detectors_cover_domain_key_json_and_path():
+    masker = Masker(pii=True, secrets=False)
+    text = (r"HACKADAY\jchen logged in; username: jchen; "
+            r'"sam_account": "jchen"; path C:\Users\jchen\docs')
+    masked, hits = masker.mask_text(text)
+    assert "jchen" not in masked
+    assert "HACKADAY\\" in masked and "C:\\Users\\" in masked and "\\docs" in masked
+    surrogate = masked.split("HACKADAY\\")[1].split(" ")[0]
+    # the SAME account gets the SAME surrogate everywhere in the context
+    assert f"username: {surrogate}" in masked
+    assert f'"sam_account": "{surrogate}"' in masked
+    assert f"Users\\{surrogate}" in masked
+    assert masker.restore(masked) == text
+
+
+def test_username_detectors_ignore_system_paths_and_unc():
+    masker = Masker(pii=True, secrets=False)
+    text = r"C:\Windows\System32 and \srv\share and C:\Users\Public"
+    masked, _ = masker.mask_text(text)
+    assert "Windows" in masked and "share" in masked and "Public" in masked
+
+
+def test_upn_and_bare_username_share_one_surrogate():
+    masker = Masker(pii=True, secrets=False)
+    text = r"HACKADAY\jchen <jchen@hackaday.lab>"
+    masked, _ = masker.mask_text(text)
+    assert "jchen" not in masked and "@corp.local" in masked
+    local = masked.split("<")[1].split("@")[0]
+    assert f"HACKADAY\\{local}" in masked
+    assert masker.restore(masked) == text
+
+
+def test_safe_rejects_overlap_with_real_values_but_allows_email_local():
+    from credshrike.surrogate import SurrogateFactory
+    # a candidate that overlaps a REAL value would corrupt it on restore
+    assert SurrogateFactory._safe("alice", "jchen", "", {"x": "alicesmith"}) is False
+    # the bare username inside that account's masked email is fine
+    assert SurrogateFactory._safe("jones", "jchen", "",
+                                  {"jones@corp.local": "jchen@real"}) is True

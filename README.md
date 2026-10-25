@@ -206,12 +206,17 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
 | PII (semantic, optional) | **PERSON**, **LOCATION** (addresses included) via GLiNER |
 | Secrets | API keys (`sk-…`, AWS `AKIA…`, GitHub `ghp_…`), JWTs, bearer tokens, PEM/OpenSSH private keys, `*PASSWORD`/`*_SECRET` assignments, DB connection strings |
 
-- **Same-length pseudonyms** for personal names and passwords (on by default):
-  `Alice Smith` → `Amber Scott` (initials, separators and case preserved),
-  `Winter2024!` → `Xkqmbn7314#` (same length, same character classes). Real
-  name dictionaries are indexed by length; uncovered lengths use a syllable
-  generator, and short/unsafe values fall back to `[[TYPE_N]]`. Configure with
-  `mask_same_length`, `mask_surrogate_style` (`name|syllable|masked`),
+- **Same-length pseudonyms** for names, passwords, usernames and emails (on by
+  default): `Alice Smith` → `Amber Scott` (initials/separators/case kept),
+  `Winter2024!` → `Xkqmbn7314#` (same classes), `HACKADAY\jchen` → `HACKADAY\kford`,
+  `C:\Users\jchen\...` → `C:\Users\kford\...`, and
+  `jchen@hackaday.lab` → `kford@corp.local` (local part same length, domain
+  normalised). The same account reuses one surrogate inside a context; tool
+  arguments are restored before execution so paths the model builds still
+  resolve. Real name dictionaries are indexed by length; uncovered lengths use
+  a syllable generator, and short/unsafe values fall back to `[[TYPE_N]]`.
+  Configure with `mask_same_length`, `mask_email_domain`,
+  `mask_surrogate_style` (`name|syllable|masked`),
   `mask_surrogate_keep_initials`, `mask_surrogate_min_len`, or
   `--no-surrogates` / `--surrogate-style`.
 - Every finding that came back through masking is marked in the report with a
@@ -233,8 +238,11 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
 
 Regexes cannot see names or places. `--mask-semantic` adds PasteGuard's
 semantic layer — `urchade/gliner_multi_pii-v1`, labels `person`, `location`,
-`address` (address → `LOCATION`), per-label floors 0.99 / 0.80 / 0.80, 384-token
-windows with 64-token overlap:
+`address` (address → `LOCATION`), per-label floors 0.90 / 0.65 / 0.70 (lower
+than upstream's 0.99 / 0.80 / 0.80: config-style text scores real names around
+0.95–0.98, and over-masking is restored while under-masking leaks PII; the
+global call threshold defaults to 0.5 so it does not raise those floors),
+384-token windows with 64-token overlap:
 
 ```bash
 pip install "credshrike[semantic]"      # pulls torch; model is ~1.1 GB

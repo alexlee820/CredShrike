@@ -15,7 +15,10 @@ Labels/thresholds match upstream:
 
 - labels ``person``, ``location``, ``address``; ``address`` maps to LOCATION
 - first use downloads ``urchade/gliner_multi_pii-v1`` (~1.1 GB)
-- per-label floors: person 0.99, location 0.80, address 0.80
+- per-label floors: person 0.90, location 0.65, address 0.70
+  (upstream uses 0.99/0.80/0.80; lowered here because config-style text
+  scores real names around 0.95-0.98, and over-masking is restored while
+  under-masking leaks PII — override with ``mask_semantic_floors``)
 - the call-level threshold can only RAISE a floor (``max``)
 - 384-token windows, 64-token overlap, inference serialized by a lock
 """
@@ -37,7 +40,7 @@ DEFAULT_MODEL = "urchade/gliner_multi_pii-v1"
 DEFAULT_LABELS = ("person", "location", "address")
 LABEL_ENTITIES = {"person": "PERSON", "location": "LOCATION",
                   "address": "LOCATION"}     # Presidio-compatible entity set
-DEFAULT_FLOORS = {"person": 0.99, "location": 0.80, "address": 0.80}
+DEFAULT_FLOORS = {"person": 0.90, "location": 0.65, "address": 0.70}
 
 _TOKEN_RE = re.compile(r"\w+(?:[-_]\w+)*|\S")
 _MODEL_DIR_ENV = "CREDSHRIKE_MODEL_DIR"
@@ -108,7 +111,7 @@ class GlinerBackend:
 
     def __init__(self, model_name: str = DEFAULT_MODEL,
                  labels: Optional[Iterable[str]] = None,
-                 threshold: float = 0.7,
+                 threshold: float = 0.5,
                  floors: Optional[dict] = None,
                  max_tokens: int = 384,
                  overlap: int = 64) -> None:
@@ -195,7 +198,7 @@ _BACKEND_LOCK = threading.Lock()
 
 def get_backend(model_name: str = DEFAULT_MODEL,
                 labels: Optional[Iterable[str]] = None,
-                threshold: float = 0.7,
+                threshold: float = 0.5,
                 floors: Optional[dict] = None,
                 max_tokens: int = 384,
                 overlap: int = 64) -> GlinerBackend:

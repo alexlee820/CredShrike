@@ -681,3 +681,22 @@ def test_streaming_falls_back_when_endpoint_rejects(session):
     assert loop.run("hi") == "plain ok"
     assert msgs.created and loop._stream_ok is False
     assert any("falling back" in line for line in lines)
+
+
+def test_tool_arguments_are_restored_before_execution(session):
+    """The model only sees surrogates; a path it builds from them must still
+    resolve. The audit keeps the model's own (masked) arguments."""
+    from credshrike.masking import Masker
+    session.masker = Masker(pii=True, secrets=False)
+    masked_path, _ = session.masker.mask_text(r"C:\Users\jchen\creds.txt")
+    assert "jchen" not in masked_path
+
+    out = ToolExecutor(session, session.policy, session.audit).execute(
+        "smb_read_file", {"host": "filesrv01.corp.local", "share": "IT",
+                          "path": masked_path})
+    assert not out["is_error"], out
+    _share, path, _offset, _max = session.smb("x").reads[-1]
+    assert "jchen" in path                       # handler saw the REAL path
+
+    last = json.loads(open(session.audit.path, encoding="utf-8").readlines()[-1])
+    assert "jchen" not in last["args"]["path"]   # audit has the masked arg

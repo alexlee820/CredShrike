@@ -63,6 +63,8 @@ def _load_policy(args) -> Policy:
         policy.mask_same_length = []
     if getattr(args, "surrogate_style", None):
         policy.mask_surrogate_style = args.surrogate_style
+    if getattr(args, "mask_email_domain", None):
+        policy.mask_email_domain = args.mask_email_domain
     if getattr(args, "skip_exts", None) is not None:
         raw = args.skip_exts.strip().lower()
         if raw == "none" or raw == "":
@@ -382,6 +384,9 @@ def register(subparsers) -> None:
                    default=None,
                    help="name = real-name dictionaries (default), syllable = "
                         "pronounceable filler, masked = Xxxx/0000")
+    p.add_argument("--mask-email-domain", default=None, metavar="DOMAIN",
+                   help="domain used for masked email/UPN addresses "
+                        "(default corp.local)")
     p.add_argument("--scan-patterns", default=None,
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")
