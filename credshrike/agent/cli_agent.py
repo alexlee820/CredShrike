@@ -44,6 +44,8 @@ def _load_policy(args) -> Policy:
         policy.stream = True
     if getattr(args, "no_stream", False):
         policy.stream = False
+    if getattr(args, "prompt_cache", None) is not None:
+        policy.prompt_cache = bool(args.prompt_cache)
     if getattr(args, "context_limit", None):
         policy.context_token_limit = int(args.context_limit)
     if getattr(args, "concurrency", None) is not None:
@@ -437,6 +439,12 @@ def register(subparsers) -> None:
     p.add_argument("--no-stream", action="store_true",
                    help="plain request/response (no SSE) — use if your "
                         "Anthropic-compatible endpoint rejects streaming")
+    p.add_argument("--prompt-cache", dest="prompt_cache", action="store_true",
+                   default=None,
+                   help="Anthropic prompt caching (cache_control); on by default, "
+                        "auto-disabled if the endpoint rejects it")
+    p.add_argument("--no-prompt-cache", dest="prompt_cache", action="store_false",
+                   help="disable prompt caching")
     p.add_argument("--debug", action="store_true",
                    help="debug mode: echo the FULL tool results (exactly what the "
                         "model received — verify transports like adws via the "

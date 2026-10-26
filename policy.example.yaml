@@ -139,3 +139,6 @@ policy:
   # Falls back to a plain request if the endpoint rejects it.
   # CLI: --stream / --no-stream
   stream: true
+  # Anthropic prompt caching (cache_control): reuse provider-side prefill
+  # for an identical prefix. Transparent; auto-disabled if unsupported.
+  prompt_cache: true

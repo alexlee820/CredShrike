@@ -128,10 +128,14 @@ def _extraction_call(client, policy, messages: list[dict]) -> tuple[list[dict], 
     last_error: Optional[str] = None
     for attempt in range(2):
         try:
+            from .prompt_cache import cacheable_messages
             resp = client.messages.create(
                 model=policy.model,
                 max_tokens=min(policy.max_tokens, 16384),
-                messages=prompt_messages,
+                # the second extraction pass reuses the first pass's prompt
+                # prefix via the provider cache (no system/tools here)
+                messages=cacheable_messages(
+                    prompt_messages, bool(getattr(policy, "prompt_cache", False))),
             )
             text = "".join(getattr(b, "text", "") for b in resp.content)
             return _sanitize(_parse_findings_json(text)), text
@@ -205,10 +209,12 @@ def extract_findings(client, policy, messages: list[dict]) -> list[dict]:
             f"(all previous entries PLUS the missing ones), same schema, raw JSON only."},
     ]
     try:
+        from .prompt_cache import cacheable_messages
         resp = client.messages.create(
             model=policy.model,
             max_tokens=min(policy.max_tokens, 16384),
-            messages=corrective_prompt,
+            messages=cacheable_messages(
+                corrective_prompt, bool(getattr(policy, "prompt_cache", False))),
         )
         text = "".join(getattr(b, "text", "") for b in resp.content)
         return _merge_passes([findings, _sanitize(_parse_findings_json(text))])

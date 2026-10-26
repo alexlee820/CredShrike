@@ -187,6 +187,7 @@ credshrike domain computers --dc DC01 --source adws --user u --domain d --passwo
 | **Audit** | JSONL log of every tool call (redacted args, verdicts, timing) |
 | **Context mgmt** | Auto-compaction at 75% of context window; overflow self-heal |
 | **Streaming** | SSE token stream (live output, same result/cost); auto-fallback if the endpoint rejects it |
+| **Prompt cache** | `cache_control` on system+tools and the rolling last message (~0.1× input on hits); transparent, auto-disabled if unsupported |
 
 ---
 

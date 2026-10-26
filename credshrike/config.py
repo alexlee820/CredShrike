@@ -110,6 +110,10 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # final message is identical to a non-streaming call. Falls back to a
     # plain request automatically when an endpoint rejects streaming.
     "stream": True,
+    # Anthropic prompt caching (cache_control): the provider reuses the
+    # prefill for an identical prefix (~0.1x input cost, lower TTFT).
+    # Transparent; disabled automatically if the endpoint rejects it.
+    "prompt_cache": True,
     # --- context-window management ------------------------------------------
     "context_token_limit": 0,       # 0 = auto-manage off (set your model's
                                     # window, e.g. 128000 for GLM, 1000000 for
@@ -179,6 +183,7 @@ class Policy:
     dump_skip_exts: list[str] = field(default_factory=lambda: list(DEFAULT_POLICY_DICT["dump_skip_exts"]))
     debug: bool = DEFAULT_POLICY_DICT["debug"]
     stream: bool = DEFAULT_POLICY_DICT["stream"]
+    prompt_cache: bool = DEFAULT_POLICY_DICT["prompt_cache"]
     context_token_limit: int = DEFAULT_POLICY_DICT["context_token_limit"]
     compact_at_ratio: float = DEFAULT_POLICY_DICT["compact_at_ratio"]
     compact_keep_recent: int = DEFAULT_POLICY_DICT["compact_keep_recent"]

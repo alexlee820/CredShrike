@@ -327,6 +327,8 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.debug = True
     if "stream" in params:
         policy.stream = bool(params["stream"])
+    if "prompt_cache" in params:
+        policy.prompt_cache = bool(params["prompt_cache"])
     if "mask_pii" in params:
         policy.mask_pii = bool(params["mask_pii"])
     if "mask_secrets" in params:

@@ -700,3 +700,100 @@ def test_tool_arguments_are_restored_before_execution(session):
 
     last = json.loads(open(session.audit.path, encoding="utf-8").readlines()[-1])
     assert "jchen" not in last["args"]["path"]   # audit has the masked arg
+
+
+# --------------------------------------------------------------------------- #
+# prompt caching (cache_control)
+# --------------------------------------------------------------------------- #
+def test_prompt_cache_marks_system_and_last_message(session):
+    captured = {}
+
+    class Msgs:
+        def create(self, **kw):
+            captured.update(kw)
+            return SimpleNamespace(
+                stop_reason="end_turn", content=[_text("ok")],
+                usage=SimpleNamespace(input_tokens=5,
+                                      cache_read_input_tokens=100,
+                                      cache_creation_input_tokens=10))
+
+    from credshrike.agent.loop import AgentLoop
+    loop = AgentLoop(SimpleNamespace(messages=Msgs()), session,
+                     session.policy, session.audit)
+    assert loop.run("hi") == "ok"
+
+    assert isinstance(captured["system"], list)
+    assert captured["system"][0]["cache_control"] == {"type": "ephemeral"}
+    last = captured["messages"][-1]
+    assert isinstance(last["content"], list)
+    assert last["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    # stored messages stay plain (no cache_control leaks into the history)
+    assert loop.messages[0]["content"] == "hi"
+    # cache tokens count toward the context window
+    assert loop.context_tokens == 115
+    assert loop.cache_read_tokens == 100
+    assert loop.cache_write_tokens == 10
+
+
+def test_prompt_cache_can_be_disabled(session):
+    session.policy.prompt_cache = False
+    captured = {}
+
+    class Msgs:
+        def create(self, **kw):
+            captured.update(kw)
+            return SimpleNamespace(stop_reason="end_turn", content=[_text("ok")])
+
+    from credshrike.agent.loop import AgentLoop
+    loop = AgentLoop(SimpleNamespace(messages=Msgs()), session,
+                     session.policy, session.audit)
+    loop.run("hi")
+    assert captured["system"] == loop.system
+    # the request used the plain conversation (no cache_control blocks)
+    assert captured["messages"][0] == {"role": "user", "content": "hi"}
+
+
+def test_prompt_cache_falls_back_when_endpoint_rejects_rettl(session):
+    calls = []
+
+    class Msgs:
+        def create(self, **kw):
+            calls.append(kw)
+            if len(calls) == 1:
+                exc = RuntimeError("400: cache_control is not supported")
+                exc.status_code = 400
+                raise exc
+            return SimpleNamespace(stop_reason="end_turn", content=[_text("ok")])
+
+    from credshrike.agent.loop import AgentLoop
+    loop = AgentLoop(SimpleNamespace(messages=Msgs()), session,
+                     session.policy, session.audit)
+    assert loop.run("hi") == "ok"
+    assert loop._prompt_cache_ok is False
+    assert isinstance(calls[1]["system"], str)   # retried without cache_control
+
+
+def test_usage_input_tokens_includes_cache_tokens():
+    from credshrike.agent.loop import AgentLoop
+    response = SimpleNamespace(usage=SimpleNamespace(
+        input_tokens=5, cache_read_input_tokens=100,
+        cache_creation_input_tokens=10))
+    assert AgentLoop._usage_input_tokens(response) == 115
+
+
+def test_findings_extraction_uses_cache_control():
+    from credshrike.agent.findings import _extraction_call
+    from credshrike.config import Policy
+    captured = {}
+
+    class Msgs:
+        def create(self, **kw):
+            captured.update(kw)
+            return SimpleNamespace(content=[SimpleNamespace(text='{"findings": []}')])
+
+    result = _extraction_call(SimpleNamespace(messages=Msgs()), Policy(),
+                              [{"role": "user", "content": "hello"}])
+    assert result[0] == []
+    last = captured["messages"][-1]
+    assert isinstance(last["content"], list)
+    assert last["content"][-1]["cache_control"] == {"type": "ephemeral"}

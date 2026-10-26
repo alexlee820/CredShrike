@@ -32,8 +32,14 @@ def _client_factory_for_hosts(hosts_findings: dict):
                 messages = kw.get("messages", [])
                 if messages:
                     last_content = messages[-1].get("content", "")
-                    text = str(last_content) if isinstance(last_content, str) else \
-                           " ".join(getattr(b, "text", "") for b in last_content)
+                    if isinstance(last_content, str):
+                        text = last_content
+                    else:
+                        # prompt caching turns the last message into content
+                        # blocks (dicts); fakes must read both shapes
+                        text = " ".join(
+                            b.get("text", "") if isinstance(b, dict)
+                            else getattr(b, "text", "") for b in last_content)
                 else:
                     text = ""
 

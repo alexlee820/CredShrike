@@ -150,6 +150,12 @@
           auto-fallback to a plain request if the endpoint rejects it</label>
       </div>
       <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="promptCache" style="width:auto" checked/>
+        <label style="margin:0" for="promptCache">Prompt caching (cache_control) —
+          reuse provider-side prefill for identical prefixes; transparent, and
+          auto-disabled if the endpoint rejects it</label>
+      </div>
+      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
         <input type="checkbox" id="debugMode" style="width:auto"/>
         <label style="margin:0" for="debugMode">Debug — show FULL tool results
           (verify adws/ldap via "source", inspect dump pages)</label>
@@ -332,6 +338,7 @@ $('startBtn').onclick = async () => {
     api_key: $('apiKey').value.trim(),
     debug: $('debugMode').checked,
     stream: $('streamMode').checked,
+    prompt_cache: $('promptCache').checked,
     policy_path: $('policyPath').value.trim(),
     max_file_bytes: $('maxFileKb').value ? Math.round($('maxFileKb').value * 1024) : '',
     result_char_cap: $('resultCharCap').value || '',

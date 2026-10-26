@@ -21,6 +21,8 @@ from typing import Callable, Optional
 
 from ..config import Policy
 from .audit import AuditLog
+from .prompt_cache import (cacheable_messages, cacheable_system,
+                           is_cache_unsupported)
 from .prompts import build_system_prompt
 from .session import AgentSession
 from .tools import anthropic_tools
@@ -56,14 +58,25 @@ class AgentLoop:
         # streaming (SSE): live token echo; disabled automatically if the
         # endpoint or client does not support it
         self._stream_ok = bool(getattr(policy, "stream", False))
+        # prompt caching (cache_control): disabled automatically if the
+        # endpoint rejects it
+        self._prompt_cache_ok = bool(getattr(policy, "prompt_cache", False))
+        self.cache_read_tokens = 0
+        self.cache_write_tokens = 0
 
     # ------------------------------------------------------------------ #
     # context-window management
     # ------------------------------------------------------------------ #
     @staticmethod
     def _usage_input_tokens(response) -> int:
+        """Total prompt size: uncached input + cache reads + cache writes
+        (the API reports those separately; context accounting needs all)."""
         usage = getattr(response, "usage", None)
-        return int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+        if usage is None:
+            return 0
+        return (int(getattr(usage, "input_tokens", 0) or 0)
+                + int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+                + int(getattr(usage, "cache_creation_input_tokens", 0) or 0))
 
     def _maybe_compact(self) -> None:
         """Replace OLD tool_result contents with placeholders when the
@@ -289,24 +302,42 @@ class AgentLoop:
         return any(key in text for key in
                    ("stream", "sse", "not supported", "unsupported"))
 
-    def _create(self):
+    def _request_kwargs(self) -> dict:
+        """API kwargs for one attempt. Rebuilt each time so a cache fallback
+        can drop ``cache_control`` without mutating stored messages."""
+        cache = self._prompt_cache_ok
         kwargs = dict(
             model=self.policy.model,
             max_tokens=self.policy.max_tokens,
-            system=self.system,
+            system=cacheable_system(self.system, cache),
             tools=anthropic_tools(),
-            messages=self.messages,
+            messages=cacheable_messages(self.messages, cache),
         )
         # adaptive thinking is an Anthropic-API feature; third-party
         # Anthropic-compatible endpoints (GLM/DeepSeek/...) may reject it
         if self.policy.thinking_mode != "off":
             kwargs["thinking"] = {"type": "adaptive"}
+        return kwargs
 
+    def _record_usage(self, resp) -> None:
+        usage = getattr(resp, "usage", None)
+        if usage is None:
+            return
+        read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        self.cache_read_tokens += read
+        self.cache_write_tokens += write
+        if self.policy.debug and (read or write):
+            self.echo(f"  ⚡ cache: read {read:,} · write {write:,} tokens")
+
+    def _create(self):
         last_error = None
         for attempt in range(self.RATE_LIMIT_RETRIES):
+            kwargs = self._request_kwargs()
             try:
                 resp = (self._stream_create(kwargs) if self._stream_ok
                         else self.client.messages.create(**kwargs))
+                self._record_usage(resp)
                 if self.policy.debug:
                     self.echo(f"  >| API response: stop_reason={resp.stop_reason}, blocks={len(resp.content)}, usage={getattr(resp, 'usage', 'N/A')}")
                     for block in resp.content:
@@ -321,6 +352,11 @@ class AgentLoop:
                 error_text = str(exc)
                 if self.policy.debug:
                     self.echo(f"  >| API error: {error_name}: {error_text[:400]}")
+                if self._prompt_cache_ok and is_cache_unsupported(exc):
+                    self._prompt_cache_ok = False
+                    self.echo("  ! prompt caching rejected by the endpoint — "
+                              "retrying without cache_control")
+                    continue
                 error_lower = error_text.lower()
                 is_rate_limit = ("rate" in error_lower or "429" in error_lower
                                  or "limit" in error_text or "overloaded" in error_text
