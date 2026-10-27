@@ -127,6 +127,7 @@ def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
 
     # Phase 2: triage every file through the 4-layer snaffler rule set
     artifacts: list[dict] = []     # report-without-reading
+    known_fps: list[dict] = []     # discarded by the known-FP name rules
     candidates: list[dict] = []    # relay reads (regex + AI)
     stats = {"dirs_walked": dirs_walked, "files_seen": len(file_list),
              "files_scanned": 0, "files_skipped_notier": 0,
@@ -138,7 +139,10 @@ def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
         verdict = triage(f["path"])
         kind = verdict["kind"]
         if kind == "discard":
-            stats["files_discarded_fp"] += 1        # known-FP name (ext filtered in walk)
+            # known-FP name (junk extensions were already filtered in the walk)
+            stats["files_discarded_fp"] += 1
+            known_fps.append({"path": f["path"], "host": host, "share": share,
+                              "reason": verdict["reason"]})
         elif kind == "artifact":
             entry = {"path": f["path"], "size": f.get("size", 0),
                      "tier": verdict["tier"], "reason": verdict["reason"],
@@ -204,11 +208,15 @@ def _smb_scan_share(ctx: AgentSession, args: dict) -> Any:
     # page the results
     skip = int(args.get("skip_matches", 0))
     page = matches[skip: skip + 50]
+    for entry in artifacts:
+        entry.setdefault("host", host)
+        entry.setdefault("share", share)
     result = {
-        "share": share, "root": args.get("path", ""),
+        "share": share, "host": host, "root": args.get("path", ""),
         "matches": page, "matches_skip": skip, "matches_total": len(matches),
         "next_skip": (skip + len(page)) if skip + len(page) < len(matches) else None,
         "artifacts": artifacts[:200],
+        "known_fps": known_fps[:100],
         "data_files": data_files[:100],
         "stats": stats,
         "patterns_used": [p["name"] for p in patterns],

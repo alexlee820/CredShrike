@@ -92,7 +92,9 @@ def test_report_html_contains_all_sections(tmp_path):
                    "IPC$", "docs"):
         assert marker in html, marker
     # tabbed layout: nav + panels + hash deep-linking
-    assert html.count('class="tab-panel') == 10 and 'data-tab="creds"' in html and 'data-tab="transcript"' in html
+    assert html.count('class="tab-panel') == 12 and 'data-tab="creds"' in html and 'data-tab="transcript"' in html
+    # triage tabs: panels always exist, BUTTONS only when data is present
+    assert 'data-tab="artifacts"' not in html and 'data-tab="fps"' not in html
     assert 'function activate(' in html and '@media print' in html
     # secret masked by default, real value only in the reveal attribute
     assert "Sup3rS3cret!" in html                     # present for the toggle...

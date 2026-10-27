@@ -848,6 +848,8 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
     total_dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
                         "bytes_read": 0, "errors": 0}
     results: dict[str, dict] = {}
+    all_artifacts: list[dict] = []
+    all_known_fps: list[dict] = []
     lock = threading.Lock()
 
     def _run_share(si_share):
@@ -880,18 +882,21 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
         all_reports.append(f"### {share_name}\n{result['report']}")
         all_findings.extend(result["findings"])
         all_skipped.extend(result["stats"].get("skipped_list", []))
+        all_artifacts.extend(result.get("artifacts", []))
+        all_known_fps.extend(result.get("known_fps", []))
 
     _finish_host_report(entry, host, session, audit, policy,
                         all_findings=all_findings, all_reports=all_reports,
                         all_skipped=all_skipped, masked_entities=masked_entities,
                         total_dump_stats=total_dump_stats, echo=echo,
-                        domain_computers=computers)
+                        domain_computers=computers,
+                        artifacts=all_artifacts, known_fps=all_known_fps)
 
 
 def _finish_host_report(entry, host, session, audit, policy,
                         all_findings, all_reports, all_skipped,
                         masked_entities, total_dump_stats, echo,
-                        domain_computers):
+                        domain_computers, artifacts=None, known_fps=None):
     """Assemble the per-host report (shared by batch and stream paths)."""
     from ..report import write_report
 
@@ -922,7 +927,8 @@ def _finish_host_report(entry, host, session, audit, policy,
                  transcript=[],
                  debug_results=session.debug_results if policy.debug else [],
                  dump_stats=total_dump_stats,
-                 skipped_files=all_skipped)
+                 skipped_files=all_skipped,
+                 artifacts=artifacts or [], known_fps=known_fps or [])
     entry["html"] = os.path.basename(html_path)
     entry["masked"] = sum(masked_entities.values())
     entry["masked_entities"] = masked_entities

@@ -302,6 +302,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
 
     artifacts_found: list[dict] = []     # triage layer 2/4 (never read)
     triage_none: list[str] = []         # no rule matched -> skipped, not read
+    known_fps: list[dict] = []          # discarded by the known-FP name rules
 
     def _on_file(f):
         if not use_triage:
@@ -317,6 +318,10 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
                 {"path": f["path"], "size": f.get("size", 0),
                  "tier": verdict.get("tier", "green"),
                  "reason": verdict.get("reason", "")})
+        elif kind == "discard":
+            known_fps.append({"path": f["path"], "host": host,
+                              "share": share_name,
+                              "reason": verdict.get("reason", "")})
         elif kind is None:
             triage_none.append(f["path"])
 
@@ -477,8 +482,13 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     # triage layers 2/4: artifacts get code-generated verdicts (never read)
     for path in triage_none:
         ledger.record(path, "SKIPPED", "no snaffler rule matched (not read)")
+    for fp in known_fps:
+        ledger.record(fp["path"], "SKIPPED",
+                      "known false positive — discarded (not read)")
     artifact_findings: list[dict] = []
     for entry in artifacts_found:
+        entry.setdefault("host", host)
+        entry.setdefault("share", share_name)
         tier = entry["tier"]
         ledger.record(entry["path"], "SKIPPED",
                       f"artifact {tier} — {entry['reason']} (reported without reading)")
@@ -565,7 +575,8 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     return {"report": report, "findings": findings, "memory": summary,
             "masked": sum(masker.summary().values()) if masker else 0,
             "masked_entities": masker.summary() if masker else {},
-            "stats": stats, "artifacts": artifacts_found}
+            "stats": stats, "artifacts": artifacts_found,
+            "known_fps": known_fps}
 
 
 def _reset_budget(policy: Policy) -> int:

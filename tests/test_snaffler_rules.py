@@ -183,3 +183,33 @@ def test_scan_tool_reads_password_named_files(tmp_path, monkeypatch):
         assert any(d["path"] == "passwords.csv" for d in result["data_files"])
     finally:
         session.close_smb()
+
+
+def test_report_has_reportonly_and_fp_tabs(tmp_path):
+    """The HTML report separates report-only (artifact) files from known FPs."""
+    from credshrike.report import build_report_html
+    audit = tmp_path / "a.jsonl"
+    audit.write_text("", encoding="utf-8")
+    html = build_report_html(
+        context={"principal": "corp\svc", "auth_type": "password"},
+        findings=[], scan_results=[], flagged=[], report_md="",
+        audit_path=str(audit),
+        artifacts=[
+            {"path": "IT/vault.kdbx", "tier": "black", "size": 1024,
+             "host": "fs01", "share": "IT", "reason": "artifact extension .kdbx"},
+            {"path": "IT/creds.ovpn", "tier": "yellow", "size": 10,
+             "host": "fs01", "share": "IT", "reason": "artifact extension .ovpn"}],
+        known_fps=[{"path": "SYSVOL/sceregvl.inf", "host": "fs01",
+                    "share": "NETLOGON", "reason": "known false positive: sceregvl.inf"}])
+    assert 'data-tab="artifacts"' in html and "Report-only files" in html
+    assert 'data-tab="fps"' in html and "Known false positives" in html
+    assert "vault.kdbx" in html and "black" in html
+    assert "sceregvl.inf" in html
+    # tiers sorted black before yellow
+    assert html.index("vault.kdbx") < html.index("creds.ovpn")
+    # tabs stay hidden when the lists are empty (non-triage runs)
+    plain = build_report_html(
+        context={"principal": "corp\svc", "auth_type": "password"},
+        findings=[], scan_results=[], flagged=[], report_md="",
+        audit_path=str(audit))
+    assert 'data-tab="artifacts"' not in plain and 'data-tab="fps"' not in plain

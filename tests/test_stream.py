@@ -322,3 +322,37 @@ def test_stream_triage_decides_what_the_llm_reads(tmp_path, monkeypatch):
     assert "no snaffler rule matched" in result["report"]
     assert "UNRESOLVED" not in result["report"].split("####")[0]
     s.close_smb()
+
+
+def test_stream_triage_known_fps_surfaced(tmp_path, monkeypatch):
+    from queue import Queue
+    from credshrike.agent.audit import AuditLog
+    from credshrike.agent.session import AgentSession
+    import credshrike.smb_session as smb_mod
+
+    policy = Policy()
+    policy.analysis_mode = "stream"
+    policy.analysis_triage = True
+    policy.analysis_group_files = 10
+    policy.analysis_group_wait_ms = 100
+    credential = Credential.from_args("password", "svc", "corp.local", password="pw")
+    s = AgentSession(credential, policy, AuditLog.new_run(str(tmp_path)),
+                     hosts=["fs01"])
+    fake = _FakeSMB({"sceregvl.inf": "something",      # known FP -> discard
+                     "deploy.ps1": "DB_PASSWORD=X\n"})  # relay
+    s.smb = lambda host: fake
+    monkeypatch.setattr(smb_mod, "SMBSession",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no net")))
+    q = Queue(); q.put(fake)
+    s.get_read_pool = lambda host: q
+    client, _ = _fake_client({})
+    result = analyze_share_streaming(
+        credential=credential, policy=policy, audit=s.audit, session=s,
+        host="fs01", share_name="IT", client_factory=lambda: client,
+        echo=lambda l: None)
+    # the FP is recorded (host/share/reason), never read, never UNRESOLVED
+    assert result["known_fps"] == [{"path": "sceregvl.inf", "host": "fs01",
+                                    "share": "IT",
+                                    "reason": "known false positive: sceregvl.inf"}]
+    assert "UNRESOLVED" not in result["report"]
+    s.close_smb()

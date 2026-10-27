@@ -106,7 +106,9 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                       debug_results: Optional[list] = None,
                       dump_stats: Optional[dict] = None,
                       skipped_files: Optional[list] = None,
-                      masking: Optional[dict] = None) -> str:
+                      masking: Optional[dict] = None,
+                      artifacts: Optional[list] = None,
+                      known_fps: Optional[list] = None) -> str:
     audit = _read_audit(audit_path)
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
@@ -194,6 +196,23 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                     else "tokens left in place (--no-mask-restore)")
         masking_note = (f"<p class='dim'>🔒 PasteGuard masking: {detail} · {restored}</p>")
 
+    _TIER_ORDER = {"black": 0, "red": 1, "yellow": 2, "green": 3}
+    artifacts = artifacts or []
+    known_fps = known_fps or []
+    artifacts_rows = "".join(
+        f"<tr><td><span class='tier {a.get('tier', '')}'>{_esc(a.get('tier', ''))}</span></td>"
+        f"<td class='path'>{_esc(a.get('path', ''))}</td>"
+        f"<td>{_esc(a.get('size', 0))}</td>"
+        f"<td class='path'>{_esc(a.get('host', ''))}/{_esc(a.get('share', ''))}</td>"
+        f"<td class='dim ev'>{_esc_cap(a.get('reason', ''))}</td></tr>"
+        for a in sorted(artifacts, key=lambda a: (_TIER_ORDER.get(a.get("tier"), 9),
+                                                  a.get("path", "")))) or         "<tr><td colspan='5' class='dim'>none — no report-only files in this run</td></tr>"
+    fp_rows = "".join(
+        f"<tr><td class='path'>{_esc(f.get('path', ''))}</td>"
+        f"<td class='path'>{_esc(f.get('host', ''))}/{_esc(f.get('share', ''))}</td>"
+        f"<td class='dim ev'>{_esc_cap(f.get('reason', ''))}</td></tr>"
+        for f in known_fps) or         "<tr><td colspan='3' class='dim'>none — no known-false-positive files hit</td></tr>"
+
     hits_rows = "".join(
         f"<tr><td class='tier {h.get('tier')}'>{_esc(h.get('tier'))}</td>"
         f"<td class='path'>{_esc(h.get('path'))}</td><td>{_esc(h.get('line'))}</td>"
@@ -269,6 +288,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   .verdict.refused, .verdict.error {{ background:#3d1c1c; color:#ff6b6b; }}
   .tier {{ font-size:11px; font-weight:700; }} .tier.red {{ color:#ff6b6b; }}
   .tier.black {{ color:#ff6b6b; background:#3d1c1c; border-radius:8px; padding:0 6px; }}
+  .tier.yellow {{ color:#ffb84d; }}
   .tier.green {{ color:#8fd6a8; }}
   .tier.yellow {{ color:#ffd166; }}
   .red {{ color:#ff6b6b; }}
@@ -321,6 +341,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <button class="tab" data-tab="creds">Credentials<span class="badge">{len(cred_findings)}</span></button>
   <button class="tab" data-tab="findings">Findings<span class="badge">{len(findings)}</span></button>
   <button class="tab" data-tab="hits">Sweep hits<span class="badge">{len(hits)}</span></button>
+  {"<button class=\"tab\" data-tab=\"artifacts\">Report-only files<span class=\"badge\">" + str(len(artifacts)) + "</span></button>" if artifacts else ""}
+  {"<button class=\"tab\" data-tab=\"fps\">Known FPs<span class=\"badge\">" + str(len(known_fps)) + "</span></button>" if known_fps else ""}
   <button class="tab" data-tab="computers">Computers<span class="badge">{len(domain_computers)}</span></button>
   <button class="tab" data-tab="shares">Shares<span class="badge">{total_shares}</span></button>
   <button class="tab" data-tab="smb">SMB activity<span class="badge">{len(reads) + len(flagged)}</span></button>
@@ -363,6 +385,23 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <h2>Sweep hits (regex, secrets masked)</h2>
   <table><tr><th>tier</th><th>path</th><th>line</th><th>pattern</th><th>snippet</th></tr>
   {hits_rows}</table>
+</div>
+
+<div class="tab-panel" id="artifacts">
+  <h2>Report-only files (Snaffler triage: the file IS the evidence — never read)</h2>
+  <p class='dim' style='font-size:13px'>These were reported from the triage rules alone;
+  their content was never sent to the LLM. black = grab-worthy (password store / hive /
+  key), red = high, yellow = interesting, green = name wide-net.</p>
+  <table><tr><th>tier</th><th>path</th><th>size (B)</th><th>host/share</th><th>rule</th></tr>
+  {artifacts_rows}</table>
+</div>
+
+<div class="tab-panel" id="fps">
+  <h2>Known false positives (discarded)</h2>
+  <p class='dim' style='font-size:13px'>Files dropped by the known-FP name rules —
+  they match credential patterns but are OS/app boilerplate.</p>
+  <table><tr><th>path</th><th>host/share</th><th>rule</th></tr>
+  {fp_rows}</table>
 </div>
 
 <div class="tab-panel" id="computers">

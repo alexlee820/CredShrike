@@ -152,6 +152,10 @@ def _emit_html_report(loop, session, policy, audit, client, report_md: str) -> s
     red = session.credential.redacted()
     path = str(Path(audit.path).with_suffix(".report.html"))
     write_report(path,
+                 artifacts=[a for s in session.scan_results
+                            for a in s.get("artifacts", [])],
+                 known_fps=[f for s in session.scan_results
+                            for f in s.get("known_fps", [])],
                  context={"principal": red["principal"], "auth_type": red["auth_type"],
                           "scope": session.allowed_hosts, "model": policy.model,
                           "endpoint": policy.api_base_url or "api.anthropic.com"},
