@@ -268,6 +268,8 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   .verdict.flagged {{ background:#3a3a16; color:#ffd166; }}
   .verdict.refused, .verdict.error {{ background:#3d1c1c; color:#ff6b6b; }}
   .tier {{ font-size:11px; font-weight:700; }} .tier.red {{ color:#ff6b6b; }}
+  .tier.black {{ color:#ff6b6b; background:#3d1c1c; border-radius:8px; padding:0 6px; }}
+  .tier.green {{ color:#8fd6a8; }}
   .tier.yellow {{ color:#ffd166; }}
   .red {{ color:#ff6b6b; }}
   .secret {{ font-family:Consolas,monospace; }}
