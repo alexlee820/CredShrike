@@ -150,21 +150,30 @@ ARTIFACT_PATHS = {  # tier -> path substrings (posix, lowered)
 
 # --- layer 3.5: relay triggers — the only files whose CONTENT is read ------ #
 RELAY_EXTS = (            # union over all 19 upstream triggers
+    # RelayConfigByExtension + infra config (Snaffler's full list; .tfvars
+    # stays an artifact-red above per the snaffle-only table)
     {".xml", ".json", ".txt", ".yaml", ".yml", ".sql", ".log", ".env",
-     ".ini", ".cfg", ".conf", ".config", ".reg", ".csv", ".tsv",
-     ".properties", ".toml", ".settings", ".plist", ".autologon"},
+     ".ini", ".inf", ".cnf", ".cfg", ".conf", ".config", ".reg", ".csv",
+     ".tsv", ".properties", ".toml", ".settings", ".plist", ".autologon",
+     ".dist", ".sqlite", ".sqlite3", ".fdb"},
     {".ps1", ".psd1", ".psm1"},
-    {".cs", ".aspx", ".asp", ".ashx", ".asmx", ".cshtml", ".razor"},
+    # csharp (.razor kept as a CredShrike extra) + vbscript
+    {".cs", ".aspx", ".asp", ".ashx", ".asmx", ".cshtml", ".ascx", ".razor"},
     {".vbs", ".vbe", ".wsf", ".wsc", ".hta"},
+    # js (.jsx/.vue/.svelte/.coffee/.json5 kept as extras)
     {".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".vue", ".svelte",
-     ".coffee", ".json5"},
+     ".coffee", ".json5", ".ls", ".es6", ".es"},
     {".java", ".jsp", ".jspx", ".do", ".cfm"},
-    {".php", ".php3", ".php4", ".php5", ".php7", ".phtml"},
+    {".php", ".php3", ".php4", ".php5", ".php7", ".phtml", ".inc"},
     {".py", ".rb", ".pl", ".bat", ".cmd"},
+    # shell rc/history (.sh/.bash/... kept as extras)
     {".sh", ".bash", ".zsh", ".ksh", ".csh", ".bashrc", ".zshrc", ".profile",
-     ".bash_profile", ".bash_history", ".zsh_history", ".netrc", ".cshrc"},
-    # certs / keys (incl. CredShrike extras .key/.vnc kept from the old RED tier)
-    {".pem", ".der", ".pfx", ".p12", ".key", ".vnc", ".rdp"},
+     ".bash_profile", ".bash_history", ".zsh_history", ".netrc", ".cshrc",
+     ".exports", ".functions", ".extra", ".npmrc", ".sh_history",
+     ".irb_history"},
+    # certs / keys (.key/.vnc kept from the old RED tier)
+    {".pem", ".der", ".pfx", ".p12", ".pk12", ".pkcs12", ".key", ".vnc",
+     ".rdp"},
 )
 RELAY_EXTS = set().union(*RELAY_EXTS)
 RELAY_NAMES = {          # exact basenames (lowered)

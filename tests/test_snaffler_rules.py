@@ -57,12 +57,16 @@ def test_artifact_but_readable_when_ext_is_relay():
 
 def test_relay_triggers_cover_languages_and_certs():
     for path in ("s/deploy.ps1", "s/module.psd1", "c/App.cs", "web/page.aspx",
-                 "v/run.vbs", "j/app.ts", "j/Serve.java", "p/index.php",
+                 "web/ctrl.ascx", "v/run.vbs", "j/app.ts", "j/Serve.java",
+                 "j/old.ls", "j/mod.es6", "p/index.php", "p/inc/helper.inc",
                  "py/tool.py", "r/app.rb", "pl/s.pl", "b/build.bat",
-                 "sh/.bashrc", "sh/deploy.sh", "sh/.netrc",
+                 "sh/.bashrc", "sh/deploy.sh", "sh/.netrc", "sh/.npmrc",
+                 "sh/.irb_history", "sh/.exports",
                  "net/cisco-rtr.cfg", "rdp/server.rdp", "xml/unattend.xml",
                  "ff/logins.json", "keys/host.pem", "keys/host_rsa",
-                 "cert/site.pfx", "env/prod.env", "cfg/main.ini",
+                 "cert/site.pfx", "cert/site.pkcs12", "cert/backup.pk12",
+                 "env/prod.env", "cfg/main.ini", "cfg/app.inf", "cfg/x.cnf",
+                 "cfg/build.dist", "db/cache.sqlite", "db/firebird.fdb",
                  "old/creds.vnc", "keys/server.key"):
         assert triage(path)["kind"] in ("relay", "artifact"), path
 
