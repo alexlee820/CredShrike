@@ -48,6 +48,12 @@ def _load_policy(args) -> Policy:
         policy.prompt_cache = bool(args.prompt_cache)
     if getattr(args, "context_limit", None):
         policy.context_token_limit = int(args.context_limit)
+    if getattr(args, "analysis_mode", None):
+        policy.analysis_mode = args.analysis_mode
+    if getattr(args, "max_concurrent_llm", None):
+        policy.max_concurrent_llm = int(args.max_concurrent_llm)
+    if getattr(args, "max_shares_in_flight", None):
+        policy.max_shares_in_flight = int(args.max_shares_in_flight)
     if getattr(args, "concurrency", None) is not None:
         policy.read_threads = int(args.concurrency)
     if getattr(args, "mask_pii", False):
@@ -236,6 +242,26 @@ def cmd_agent(args) -> None:
                 memory = ""    # rolling summary across shares
                 for si, share_info in enumerate(dumpable, 1):
                     share_name = share_info["name"]
+
+                    if policy.analysis_mode == "stream":
+                        # stream mode walks + reads + analyzes on its own
+                        from .stream_analysis import analyze_share_streaming
+                        print(f"[share] {host}/{share_name}: streaming analysis...")
+                        result = analyze_share_streaming(
+                            credential=credential, policy=policy, audit=audit,
+                            session=session, host=host, share_name=share_name,
+                            client_factory=lambda: _make_client(policy),
+                            echo=lambda l: print(l),
+                            memory_block=f"({si}/{len(dumpable)}) ",
+                            memory=memory)
+                        memory = result["memory"]
+                        all_reports.append(f"### {share_name}\n{result['report']}")
+                        all_findings.extend(result["findings"])
+                        session.budget.bytes_read += result["stats"].get("bytes_read", 0)
+                        print(f"[share] {host}/{share_name}: "
+                              f"{len(result['findings'])} finding(s)")
+                        continue
+
                     file_entries, stats, skipped = _dump_single_share(
                         session, host, share_name, policy,
                         lambda l: print(l), read_threads=concurrency)
@@ -450,6 +476,16 @@ def register(subparsers) -> None:
                         "model received — verify transports like adws via the "
                         "'source' field, inspect dump/scan pages); also recorded "
                         "in the report's Debug tab")
+    p.add_argument("--analysis-mode", choices=["batch", "stream"], default=None,
+                   help="stream = walkers feed ONE LLM thread per share "
+                        "(micro-batches of K files, shared session, code-side "
+                        "ledger guarantees coverage); batch = dump-then-analyze "
+                        "(default). CLI/policy; web UI has a dropdown")
+    p.add_argument("--max-concurrent-llm", type=int, default=None,
+                   help="global in-flight LLM requests across shares "
+                        "(stream mode; default 2)")
+    p.add_argument("--max-shares-in-flight", type=int, default=None,
+                   help="shares pipelined concurrently in stream mode (default 2)")
     p.add_argument("--context-limit", type=int, default=None,
                    help="your model's context window in tokens (e.g. 128000 for "
                         "GLM). When the conversation passes 75%% of it, old tool "

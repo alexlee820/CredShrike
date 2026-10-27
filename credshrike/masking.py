@@ -346,6 +346,13 @@ class MaskContext:
                 found.add(self.entities.get(token, "MASKED"))
         return found
 
+    def tokens_in(self, text: str) -> dict[str, str]:
+        """{token: entity} for every registered token present in ``text`` —
+        used by the stream ledger to build a cross-file entity index."""
+        with self._lock:
+            return {token: self.entities.get(token, "MASKED")
+                    for token in self.mapping if token and token in text}
+
     def restore(self, text: str, marker_text: str = "",
                 show_markers: bool = False) -> str:
         if not text or not self.mapping:
@@ -503,6 +510,9 @@ class Masker:
     def entities_in(self, text: str) -> set[str]:
         """Entity types whose token appears in ``text`` (before restore)."""
         return self.context.entities_in(text)
+
+    def tokens_in(self, text: str) -> dict[str, str]:
+        return self.context.tokens_in(text)
 
     # ------------------------------------------------------------------ #
     def _allow_spans(self, text: str) -> list[tuple[int, int]]:

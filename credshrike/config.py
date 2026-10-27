@@ -17,6 +17,16 @@ from .credentials import Credential
 DEFAULT_POLICY_DICT: dict[str, Any] = {
     "max_file_bytes": 256 * 1024,       # per smb_read_file call
     "max_entries": 500,                 # per smb_list_dir call
+    # --- streaming share analysis (analysis_mode: stream) ------------------
+    # Pipeline: walkers list dirs → path queue → ONE LLM thread per share
+    # reads files itself and sends micro-batches. Coverage enforced by a
+    # code-side ledger (Part 1 of the report is generated from it).
+    "analysis_mode": "batch",           # batch | stream
+    "analysis_group_files": 10,         # K files per request
+    "analysis_group_wait_ms": 2000,     # wait this long to fill a group
+    "analysis_reset_ratio": 0.7,        # session reset at 70% of the context budget
+    "max_concurrent_llm": 2,            # global in-flight LLM requests
+    "max_shares_in_flight": 2,          # shares pipelined concurrently (stream)
     "result_char_cap": 8192,            # per tool_result fed to the LLM
     "max_tool_calls": 100,              # per run
     "max_total_read_bytes": 10 * 1024 * 1024,
@@ -132,6 +142,12 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
 class Policy:
     max_file_bytes: int = DEFAULT_POLICY_DICT["max_file_bytes"]
     max_entries: int = DEFAULT_POLICY_DICT["max_entries"]
+    analysis_mode: str = DEFAULT_POLICY_DICT["analysis_mode"]
+    analysis_group_files: int = DEFAULT_POLICY_DICT["analysis_group_files"]
+    analysis_group_wait_ms: int = DEFAULT_POLICY_DICT["analysis_group_wait_ms"]
+    analysis_reset_ratio: float = DEFAULT_POLICY_DICT["analysis_reset_ratio"]
+    max_concurrent_llm: int = DEFAULT_POLICY_DICT["max_concurrent_llm"]
+    max_shares_in_flight: int = DEFAULT_POLICY_DICT["max_shares_in_flight"]
     result_char_cap: int = DEFAULT_POLICY_DICT["result_char_cap"]
     max_tool_calls: int = DEFAULT_POLICY_DICT["max_tool_calls"]
     max_total_read_bytes: int = DEFAULT_POLICY_DICT["max_total_read_bytes"]

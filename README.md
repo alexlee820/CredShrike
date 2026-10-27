@@ -132,6 +132,22 @@ report with cross-host credential merging.
 credshrike agent --host FILE01.hackaday.lab ... --preset full
 ```
 
+### Streaming Analysis (optional, faster wall clock)
+
+`--analysis-mode stream` pipelines each share: directory walkers push file
+paths into a queue while a single per-share LLM thread reads the files itself
+and sends micro-batches (default 10 files/request). Every file must produce a
+checklist verdict in a code-side ledger — Part 1 of the report is generated
+from it, so coverage is enforced without a second LLM pass. Sessions reset
+near the context limit (ledger carried over), shares run up to
+`max_shares_in_flight` in parallel under a global `max_concurrent_llm`
+semaphore, and the web UI monitor gets separate Walking/AI-thread tabs with
+share filter chips. `batch` remains the default.
+
+```bash
+credshrike agent --preset full-domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 2
+```
+
 ### Snaffler-Style Credential Sweep (fast triage)
 
 ```bash

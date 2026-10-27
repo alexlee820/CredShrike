@@ -107,6 +107,18 @@ policy:
   mask_surrogate_keep_initials: true
   mask_surrogate_min_len: 4
 
+  # --- analysis mode --------------------------------------------------------
+  # batch (default): dump whole share, then analyze in context-sized batches.
+  # stream: walkers list dirs -> ONE LLM thread per share reads files itself
+  # and sends micro-batches (group_files per request); a code-side ledger
+  # guarantees every file gets a verdict. Shares run pipelined.
+  analysis_mode: batch            # batch | stream  (CLI: --analysis-mode)
+  analysis_group_files: 10        # K files per LLM request (stream)
+  analysis_group_wait_ms: 2000    # wait this long to fill a group (stream)
+  analysis_reset_ratio: 0.7       # session reset threshold (stream)
+  max_concurrent_llm: 2           # global in-flight LLM requests (stream)
+  max_shares_in_flight: 2         # shares pipelined concurrently (stream)
+
   # --- parallel SMB reads + full-content dump caps -------------------------
   read_threads: 10                # parallel reads per share (CLI --concurrency)
   dump_depth: 6                   # directory levels walked

@@ -194,10 +194,15 @@ def _extract_office_text(raw_bytes: bytes, ext: str) -> str:
 def _walk_share_files(smb_session, share_name: str, depth: int,
                        max_files: int, echo,
                        skip_exts: Optional[set] = None,
-                       conn_pool=None, walk_threads: int = 1) -> tuple[list[dict], int, list[dict]]:
-    """Phase 1: walk directory tree using PARALLEL BFS. All directories at
-    the same level are listed concurrently. Each listing borrows its own
-    connection from the pool (SMB is not thread-safe)."""
+                       conn_pool=None, walk_threads: int = 1,
+                       on_file: Optional[Callable] = None) -> tuple[list[dict], int, list[dict]]:
+    """Phase 1: walk directory tree using PARALLEL BFS. All directories at the
+    same level are listed concurrently. Each listing borrows its own
+    connection from the pool (SMB is not thread-safe).
+
+    ``on_file``: streaming hook — called with each discovered (filtered) file
+    dict as soon as it is seen (must be thread-safe, e.g. queue.put). Used by
+    analysis_mode=stream so the LLM worker starts while the walk runs."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     skip = skip_exts if skip_exts is not None else DEFAULT_SKIP_EXTENSIONS
@@ -254,7 +259,10 @@ def _walk_share_files(smb_session, share_name: str, depth: int,
                     if ext in skip:
                         skipped.append({"path": child, "size": entry.get("size", 0), "ext": ext})
                     else:
-                        files.append({"path": child, "size": entry.get("size", 0)})
+                        entry_dict = {"path": child, "size": entry.get("size", 0)}
+                        files.append(entry_dict)
+                        if on_file is not None:
+                            on_file(entry_dict)
         current_level = next_level
 
     echo(f"  ⋮ walk done: {dirs_walked} dirs, {len(files)} to read, "
@@ -724,10 +732,13 @@ def merge_findings(all_findings: list[dict]) -> dict:
 
 def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
                     policy: Policy, dc: str, domain_source: str, computers: list,
-                    client_factory, echo, read_threads: int = 10) -> None:
+                    client_factory, echo, read_threads: int = 10,
+                    emit=None) -> None:
     """Sweep ONE host using PER-SHARE context windows. File reads within each
     share use ThreadPoolExecutor (SMB I/O parallelism). LLM analysis is
-    sequential (one share at a time — avoids rate-limit storms)."""
+    sequential (one share at a time — avoids rate-limit storms) in batch
+    mode; in stream mode shares are pipelined (max_shares_in_flight) with a
+    global request semaphore."""
     from .audit import AuditLog
     from .session import AgentSession
     from ..report import write_report
@@ -743,6 +754,13 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         dumpable = [s for s in shares if not s.get("special")]
         echo(f"[domain] {host}: {len(dumpable)} share(s) to analyze "
              f"({', '.join(s['name'] for s in dumpable)})")
+
+        if getattr(policy, "analysis_mode", "batch") == "stream":
+            _sweep_one_host_stream(entry, host, credential, policy, dc,
+                                   domain_source, dumpable, session, audit,
+                                   client_factory, echo, emit,
+                                   computers=[c.to_dict() for c in computers])
+            return
 
         all_findings: list[dict] = []
         all_reports: list[str] = []
@@ -790,44 +808,17 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             entry["tool_calls"] = session.budget.tool_calls
 
         # Combine all share findings + reports into host-level output
-        entry["dump_stats"] = total_dump_stats
-        entry["findings"] = all_findings
-        entry["report_md"] = "\n\n".join(all_reports)
-        entry["skipped_files"] = all_skipped
-
-        red = session.credential.redacted()
-        html_path = audit.path[:-len(".jsonl")] + ".report.html"
-        masking = ({"entities": masked_entities, "restored": policy.mask_restore}
-                   if (policy.mask_pii or policy.mask_secrets or policy.mask_semantic)
-                   else None)
-        write_report(html_path,
-                     context={"principal": red["principal"],
-                              "auth_type": red["auth_type"], "scope": [host],
-                              "model": policy.model,
-                              "endpoint": policy.api_base_url or "api.anthropic.com"},
-                     masking=masking,
-                     findings=all_findings, scan_results=session.scan_results,
-                     flagged=session.flagged_files,
-                     report_md=entry["report_md"],
-                     audit_path=audit.path,
-                     domain_computers=[c.to_dict() for c in computers],
-                     share_inventories=session.share_inventories,
-                     transcript=[],
-                     debug_results=session.debug_results if policy.debug else [],
-                     dump_stats=total_dump_stats,
-                     skipped_files=all_skipped)
-        entry["html"] = os.path.basename(html_path)
-        entry["status"] = "done"
-        entry["masked"] = masked_total
-        entry["masked_entities"] = masked_entities
+        _finish_host_report(entry, host, session, audit, policy,
+                            all_findings=all_findings, all_reports=all_reports,
+                            all_skipped=all_skipped,
+                            masked_entities=masked_entities,
+                            total_dump_stats=total_dump_stats, echo=echo,
+                            domain_computers=[c.to_dict() for c in computers])
         if masked_total:
             echo(f"[mask] {host}: {masked_total} sensitive value(s) replaced with "
                  f"placeholders before leaving for the LLM (restored in the report)")
         echo(f"[domain] {host}: done — {len(all_findings)} finding(s) across "
              f"{len(dumpable)} share(s), report {entry['html']}")
-        echo(f"[domain] {host}: done — {len(entry['findings'])} finding(s), "
-             f"{entry['tool_calls']} calls, report "
-             f"{os.path.join(run_dir, entry['html'])}")
     finally:
         try:
             session.close()
@@ -835,9 +826,113 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             pass
 
 
+def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
+                           dumpable, session, audit, client_factory, echo, emit,
+                           computers=None):
+    """stream mode: shares pipelined (each = walkers + one LLM thread),
+    bounded by max_shares_in_flight and a global LLM request semaphore."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .stream_analysis import analyze_share_streaming, api_semaphore
+
+    in_flight = max(1, int(getattr(policy, "max_shares_in_flight", 2)))
+    sem = api_semaphore(getattr(policy, "max_concurrent_llm", 2))
+    budget_lock = threading.Lock()
+    echo(f"[domain] {host}: STREAM analysis — shares pipelined "
+         f"(max {in_flight} in flight, {getattr(policy, 'max_concurrent_llm', 2)} "
+         f"concurrent LLM requests)")
+
+    all_findings: list[dict] = []
+    all_reports: list[str] = []
+    all_skipped: list[dict] = []
+    masked_entities: dict[str, int] = {}
+    total_dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
+                        "bytes_read": 0, "errors": 0}
+    results: dict[str, dict] = {}
+    lock = threading.Lock()
+
+    def _run_share(si_share):
+        si, share_info = si_share
+        share_name = share_info["name"]
+        # shares run concurrently: no cross-share memory chain in stream mode
+        result = analyze_share_streaming(
+            credential=credential, policy=policy, audit=audit, session=session,
+            host=host, share_name=share_name, client_factory=client_factory,
+            echo=echo, emit=emit, dc=dc, domain_source=domain_source,
+            sem=sem, budget_lock=budget_lock,
+            memory_block=f"({si}/{len(dumpable)}) ")
+        with lock:
+            results[share_name] = result
+
+    with ThreadPoolExecutor(max_workers=min(in_flight, max(1, len(dumpable)))) as pool:
+        list(pool.map(_run_share, list(enumerate(dumpable, 1))))
+
+    for share_info in dumpable:               # deterministic report order
+        share_name = share_info["name"]
+        result = results.get(share_name)
+        if result is None:
+            all_reports.append(f"### {share_name}\n(analysis failed)")
+            continue
+        for key in total_dump_stats:
+            total_dump_stats[key] += result["stats"].get(key, 0)
+        for entity, count in result.get("masked_entities", {}).items():
+            masked_entities[entity] = masked_entities.get(entity, 0) + count
+        all_reports.append(f"### {share_name}\n{result['report']}")
+        all_findings.extend(result["findings"])
+        all_skipped.extend(result["stats"].get("skipped_list", []))
+
+    _finish_host_report(entry, host, session, audit, policy,
+                        all_findings=all_findings, all_reports=all_reports,
+                        all_skipped=all_skipped, masked_entities=masked_entities,
+                        total_dump_stats=total_dump_stats, echo=echo,
+                        domain_computers=computers)
+
+
+def _finish_host_report(entry, host, session, audit, policy,
+                        all_findings, all_reports, all_skipped,
+                        masked_entities, total_dump_stats, echo,
+                        domain_computers):
+    """Assemble the per-host report (shared by batch and stream paths)."""
+    from ..report import write_report
+
+    entry["dump_stats"] = total_dump_stats
+    entry["findings"] = all_findings
+    entry["report_md"] = "\n\n".join(all_reports)
+    entry["skipped_files"] = all_skipped
+    entry["bytes_read"] = session.budget.bytes_read
+    entry["tool_calls"] = session.budget.tool_calls
+
+    red = session.credential.redacted()
+    html_path = audit.path[:-len(".jsonl")] + ".report.html"
+    masking = ({"entities": masked_entities, "restored": policy.mask_restore}
+               if (policy.mask_pii or policy.mask_secrets or policy.mask_semantic)
+               else None)
+    write_report(html_path,
+                 context={"principal": red["principal"],
+                          "auth_type": red["auth_type"], "scope": [host],
+                          "model": policy.model,
+                          "endpoint": policy.api_base_url or "api.anthropic.com"},
+                 masking=masking,
+                 findings=all_findings, scan_results=session.scan_results,
+                 flagged=session.flagged_files,
+                 report_md=entry["report_md"],
+                 audit_path=audit.path,
+                 domain_computers=domain_computers or [],
+                 share_inventories=session.share_inventories,
+                 transcript=[],
+                 debug_results=session.debug_results if policy.debug else [],
+                 dump_stats=total_dump_stats,
+                 skipped_files=all_skipped)
+    entry["html"] = os.path.basename(html_path)
+    entry["masked"] = sum(masked_entities.values())
+    entry["masked_entities"] = masked_entities
+    entry["status"] = "done"
+    echo(f"[domain] {host}: done — {len(all_findings)} finding(s), "
+         f"report {os.path.basename(html_path)}")
+
+
 def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                            domain_source, computers, client_factory, echo,
-                           read_threads=10):
+                           read_threads=10, emit=None):
     """Sweep one host with transient-error retry. Fills entry fields on
     success; records errors."""
     echo(f"[domain] {host}: START sweep")
@@ -852,7 +947,7 @@ def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
         try:
             _sweep_one_host(entry, host, run_dir, credential, policy, dc,
                             domain_source, computers, client_factory, echo,
-                            read_threads=read_threads)
+                            read_threads=read_threads, emit=emit)
             return
         except Exception as exc:  # noqa: BLE001
             message = str(exc).lower()
@@ -895,6 +990,8 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
         "--mask-secrets" if policy.mask_secrets else "",
         "--mask-semantic" if policy.mask_semantic else "",
         f"--skip-exts '{','.join(policy.dump_skip_exts[:6])}...'" if policy.dump_skip_exts else "",
+        f"--analysis-mode {policy.analysis_mode}" if getattr(policy, "analysis_mode", "batch") != "batch" else "",
+        f"--max-concurrent-llm {policy.max_concurrent_llm}" if getattr(policy, "max_concurrent_llm", 2) != 2 else "",
         "--debug" if policy.debug else "",
     ]
     cli_cmd = " \\\n  ".join(p for p in cmd_parts if p)
@@ -928,6 +1025,13 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     echo(f" Budget     : {policy.max_tool_calls} calls / {policy.max_total_read_bytes // 1048576} MiB / {policy.wall_clock_seconds}s")
     echo(f" Streaming  : {'SSE (live output, auto-fallback)' if policy.stream else 'off'}")
     echo(f" Prompt cache: {'on (auto-fallback)' if policy.prompt_cache else 'off'}")
+    if getattr(policy, "analysis_mode", "batch") == "stream":
+        echo(f" Analysis   : stream (group={policy.analysis_group_files} files/request, "
+             f"reset@{int(policy.analysis_reset_ratio * 100)}%, "
+             f"≤{policy.max_concurrent_llm} concurrent LLM, "
+             f"{policy.max_shares_in_flight} share(s) in flight)")
+    else:
+        echo(" Analysis   : batch (dump-then-analyze, auto-split)")
     echo(f" Debug      : {'ON' if policy.debug else 'off'}")
     echo(sep)
     echo(" Equivalent CLI command:")
@@ -940,7 +1044,7 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                      computers_filter: str = "", max_hosts: Optional[int] = None,
                      client_factory: Optional[Callable] = None, echo=print,
                      source_override=None, reachable_check: Optional[Callable] = None,
-                     concurrency: int = 0) -> dict:
+                     concurrency: int = 0, emit=None) -> dict:
     """Sweep a domain. Hosts are SEQUENTIAL (one at a time — LLM analysis is
     the bottleneck, not host discovery). Within each share, files are read
     in PARALLEL via ThreadPoolExecutor (SMB I/O parallelism). The
@@ -1000,7 +1104,7 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
         echo(f"[domain] ({index}/{len(hosts)}) {host}: sweeping")
         _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                                domain_source, computers, client_factory, echo,
-                               read_threads=concurrency)
+                               read_threads=concurrency, emit=emit)
 
     merged = merge_findings([f for r in results for f in r["findings"]])
     context = {"principal": credential.redacted()["principal"],

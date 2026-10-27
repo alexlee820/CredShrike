@@ -96,6 +96,14 @@
      line would blow the whole layout to 30000px+ */
   .panel, #live, #report, #flagged, .kv, .bar, .bottom .cell { min-width:0; }
   #live div { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+  .logtab { background:#0d1117; color:var(--dim); border:1px solid var(--line);
+            border-radius:6px; padding:2px 10px; font-size:12px; cursor:pointer;
+            margin-right:6px; }
+  .logtab.active { color:var(--fg); border-color:var(--acc); }
+  .chip { display:inline-block; border:1px solid var(--line); border-radius:9px;
+          font-size:11px; padding:1px 8px; margin-left:4px; cursor:pointer;
+          color:var(--dim); }
+  .chip.on { color:#8fd6a8; border-color:#2f6b4a; }
   #report, #flagged { overflow-wrap:anywhere; word-break:break-word; }
 </style>
 </head>
@@ -268,6 +276,13 @@
           <input id="scanMaxFiles" type="number" placeholder="200"/></div>
         <div class="field"><label>Scan: bytes per file (KiB)</label>
           <input id="scanMaxFileKb" type="number" placeholder="64"/></div>
+        <div class="field"><label>Analysis mode</label>
+          <select id="analysisMode">
+            <option value="batch" selected>batch — dump then analyze (auto-split)</option>
+            <option value="stream">stream — walk + one LLM thread per share (pipelined)</option>
+          </select></div>
+        <div class="field"><label>Concurrent LLM requests (stream)</label>
+          <input id="maxConcurrentLlm" type="number" placeholder="2"/></div>
       </div>
     </details>
 
@@ -284,6 +299,12 @@
       <div class="bar"><i id="budgetBar"></i></div>
       <button class="secondary hidden" id="showMoreBtn"
               style="margin:6px 0">▲ show more (0 older)</button>
+      <div id="logTabs" class="hidden">
+        <button class="logtab active" data-tab="all">全部</button>
+        <button class="logtab" data-tab="walk">Walking/SMB</button>
+        <button class="logtab" data-tab="ai">AI thread</button>
+        <span id="shareChips" style="margin-left:8px"></span>
+      </div>
       <div id="live"></div>
       <div class="btnrow">
         <button class="secondary" id="stopBtn">Stop</button>
@@ -301,6 +322,7 @@
 </main>
 <script>
 let runId = null, timer = null, allLines = [], visibleCount = 100;
+let allEvents = [], activeTab = 'all', activeShare = null;
 
 const $ = id => document.getElementById(id);   // MUST precede all $() uses (TDZ)
 
@@ -351,6 +373,8 @@ $('startBtn').onclick = async () => {
     max_entries: $('maxEntries').value || '',
     scan_max_files: $('scanMaxFiles').value || '',
     scan_max_file_bytes: $('scanMaxFileKb').value ? Math.round($('scanMaxFileKb').value * 1024) : '',
+    analysis_mode: $('analysisMode').value,
+    max_concurrent_llm: $('maxConcurrentLlm').value || '',
     mask_pii: $('maskPii').checked,
     mask_secrets: $('maskSecrets').checked,
     mask_semantic: $('maskSemantic').checked,
@@ -383,10 +407,41 @@ $('followBtn').onclick = async () => {
   $('followup').value = '';
 };
 
+document.querySelectorAll('.logtab').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.logtab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeTab = btn.dataset.tab;
+    renderLive();
+  };
+});
+
+function filteredLines() {
+  if (!allEvents.length || activeTab === 'all')
+    return activeShare ? allLines.filter(l => l.includes(`(${activeShare})`)) : allLines;
+  let chs = activeTab === 'walk' ? ['walk', 'system'] : ['ai', 'reduce'];
+  let evs = allEvents.filter(e => chs.includes(e.ch));
+  if (activeShare) evs = evs.filter(e => !e.sh || e.sh === activeShare);
+  return evs.map(e => e.text);
+}
+
+function renderChips() {
+  const shares = [...new Set(allEvents.filter(e => e.sh).map(e => e.sh))];
+  const wrap = $('shareChips');
+  if (!shares.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = shares.map(s =>
+    `<span class="chip${s === activeShare ? ' on' : ''}" data-share="${s}">${s}</span>`).join('');
+  wrap.querySelectorAll('.chip').forEach(c => {
+    c.onclick = () => { activeShare = activeShare === c.dataset.share ? null : c.dataset.share;
+                       renderChips(); renderLive(); };
+  });
+}
+
 function renderLive() {
   const live = $('live');
   const atBottom = live.scrollHeight - live.scrollTop - live.clientHeight < 60;
-  const shown = allLines.slice(-visibleCount);
+  const source = filteredLines();
+  const shown = source.slice(-visibleCount);
   live.innerHTML = shown.map(l => {
     // extract [mm:ss] timestamp prefix and render as a dim <time> tag
     const m = l.match(/^\[(\d{2}:\d{2})\]\s?(.*)/);
@@ -431,6 +486,9 @@ async function poll() {
       ` <span class="transport-badge ${t}">${tLabel}</span>`;
   }
   allLines = s.lines || [];
+  allEvents = s.events || [];
+  $('logTabs').classList.toggle('hidden', !allEvents.length);
+  renderChips();
   renderLive();
   if (s.budget) {
     const pct = Math.min(100, 100 * s.budget.tool_calls / s.budget.max_tool_calls);

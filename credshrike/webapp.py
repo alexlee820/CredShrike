@@ -56,6 +56,7 @@ class RunState:
         self.params = params
         self.status = "starting"     # starting|running|done|error|stopped
         self.lines: list[str] = []
+        self.events: list[dict] = []
         self.report: str = ""
         self.report_html_path = ""
         self.error: str = ""
@@ -66,6 +67,9 @@ class RunState:
         self.lock = threading.Lock()
 
     def push(self, line: str) -> None:
+        self.push_event("system", line)
+
+    def push_event(self, channel: str, line: str, share: str = "") -> None:
         # cap stored line length: debug-mode tool results can be 40K+ chars
         # per line — raw storage would blow up the polling payload and the
         # browser render
@@ -79,12 +83,17 @@ class RunState:
             self.lines.append(stamped)
             if len(self.lines) > 5000:
                 del self.lines[:1000]
+            self.events.append({"t": stamp, "ch": channel,
+                                "sh": share or "", "text": stamped})
+            if len(self.events) > 5000:
+                del self.events[:1000]
 
     def public(self) -> dict:
         session = self.session
         return {
             "id": self.id, "status": self.status, "created": self.created,
             "lines": self.lines[-300:],
+            "events": self.events[-400:],
             "report": self.report, "error": self.error,
             "report_html": self.report_html_path or None,
             "audit_path": self.audit_path,
@@ -148,6 +157,7 @@ def _execute_run(state: RunState) -> None:
                 client_factory=lambda: (_client_factory() if _client_factory
                                         else _build_client(params)),
                 echo=state.push,
+                emit=state.push_event,
                 source_override=lambda: [ComputerRecord(cn=h.split(".")[0], dns_name=h)
                                         for h in host_list],
                 concurrency=int(params.get("concurrency") or policy.read_threads))
@@ -172,7 +182,8 @@ def _execute_run(state: RunState) -> None:
                 concurrency=int(params.get("concurrency") or policy.read_threads),
                 client_factory=lambda: (_client_factory() if _client_factory
                                         else _build_client(params)),
-                echo=state.push)
+                echo=state.push,
+                emit=state.push_event)
             done = sum(1 for h in summary["hosts"] if h["status"] == "done")
             state.report = (f"Domain sweep: {done}/{len(summary['hosts'])} hosts swept, "
                             f"{len(summary['merged']['credentials'])} unique credential(s). "
@@ -329,6 +340,12 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.stream = bool(params["stream"])
     if "prompt_cache" in params:
         policy.prompt_cache = bool(params["prompt_cache"])
+    if params.get("analysis_mode") in ("batch", "stream"):
+        policy.analysis_mode = params["analysis_mode"]
+    if params.get("max_concurrent_llm"):
+        policy.max_concurrent_llm = int(params["max_concurrent_llm"])
+    if params.get("max_shares_in_flight"):
+        policy.max_shares_in_flight = int(params["max_shares_in_flight"])
     if "mask_pii" in params:
         policy.mask_pii = bool(params["mask_pii"])
     if "mask_secrets" in params:
