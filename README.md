@@ -151,11 +151,18 @@ share filter chips. `batch` remains the default.
 credshrike agent --preset full-domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 2
 ```
 
-### Snaffler-Style Credential Sweep (fast triage)
+### Regex-Sweep Credential Triage (fast, cheap — formerly "snaffler")
 
 ```bash
-credshrike agent --host FILE01.hackaday.lab ... --preset snaffler
+credshrike agent --host FILE01.hackaday.lab ... --preset regex-sweep
+# 'snaffler' still works as a deprecated alias
 ```
+
+This preset is a canned goal (same agent loop as custom goals) driving the
+`smb_scan_share` tool: Snaffler's 4-layer triage decides what to look at,
+regex scans relay files, the AI judges hits / reads data files / checks
+exposure. For LLM-only detection use full/full-domain + stream +
+`--analysis-triage`.
 
 ### Web UI
 

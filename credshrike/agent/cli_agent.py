@@ -100,7 +100,7 @@ def _build_session(args):
     return session, policy, audit
 
 
-SNAFFLER_PRESET = (
+REGEX_SWEEP_PRESET = (
     "Run a credential sweep on the shares of the in-scope host(s): call "
     "smb_scan_share first (deterministic, Snaffler-structured). Hits are PAGED — while a "
     "result has next_skip set, call smb_scan_share again with skip_matches="
@@ -315,7 +315,7 @@ def cmd_agent(args) -> None:
                 session.close()
         return
 
-    # everything else: regular agent loop (custom goal, snaffler)
+    # everything else: regular agent loop (custom goal, regex-sweep)
     session, policy, audit = _build_session(args)
     red = session.credential.redacted()
     print(f"[agent] credential {red['principal']} ({red['auth_type']}) | "
@@ -329,8 +329,8 @@ def cmd_agent(args) -> None:
 
     try:
         goal = args.goal
-        if not goal and args.preset == "snaffler":
-            goal = SNAFFLER_PRESET
+        if not goal and args.preset in ("snaffler", "regex-sweep"):
+            goal = REGEX_SWEEP_PRESET
         if goal:
             report = loop.run(goal)
             print(report)
@@ -369,6 +369,11 @@ def cmd_agent(args) -> None:
                 print(f"[error] {type(exc).__name__}: {exc}", file=sys.stderr)
     finally:
         session.close()
+
+
+# deprecated alias (renamed 2026-10-27: the preset is a canned goal driving
+# the regex-triage tool; it is not Snaffler itself)
+SNAFFLER_PRESET = REGEX_SWEEP_PRESET
 
 
 def register(subparsers) -> None:
@@ -430,8 +435,11 @@ def register(subparsers) -> None:
     p.add_argument("--scan-patterns", default=None,
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")
-    p.add_argument("--preset", choices=["snaffler", "full", "full-domain"], default=None,
-                   help="canned goal: 'snaffler' = tier/regex sweep then judgment; "
+    p.add_argument("--preset",
+                   choices=["regex-sweep", "snaffler", "full", "full-domain"],
+                   default=None,
+                   help="canned goal: 'regex-sweep' = regex triage sweep then AI "
+                        "judgment (fast/cheap; 'snaffler' is a deprecated alias); "
                         "'full' = smb_dump_share EVERY file (any format) then "
                         "extraction — full-content review; 'full-domain' = "
                         "per-computer fan-out (own context window per host, "

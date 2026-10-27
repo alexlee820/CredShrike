@@ -137,7 +137,8 @@ def test_stop_mid_run(client, fake_client):
 
 
 def test_snaffler_preset_goal(client, fake_client):
-    run_id = client.post("/api/runs", json=_params(preset="snaffler", goal="")).get_json()["id"]
+    # 'regex-sweep' is the name; 'snaffler' stays as a deprecated alias
+    run_id = client.post("/api/runs", json=_params(preset="regex-sweep", goal="")).get_json()["id"]
     s = _wait_status(client, run_id, {"done", "error"})
     assert s["status"] == "done", s.get("error")
     # the preset goal text actually reached the LLM as the first user message
@@ -389,3 +390,9 @@ def test_ui_concurrency_defaults_to_10(client):
     p = Policy()
     webapp._apply_policy_overrides(p, {"concurrency": 10})
     assert p.read_threads == 10
+
+
+def test_snaffler_alias_still_works(client, fake_client):
+    run_id = client.post("/api/runs", json=_params(preset="snaffler", goal="")).get_json()["id"]
+    s = _wait_status(client, run_id, {"done", "stopped", "error"}, timeout=15)
+    assert s["status"] in ("done", "stopped"), s.get("error")

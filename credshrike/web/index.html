@@ -122,7 +122,7 @@
         <select id="preset">
           <option value="full-domain">full-domain — per-computer sweep (default)</option>
           <option value="full">full — dump EVERY file, AI reviews all</option>
-          <option value="snaffler">snaffler — tier/regex sweep + judgment</option>
+          <option value="regex-sweep">regex-sweep — fast regex triage + AI judgment</option>
           <option value="custom">custom goal</option>
         </select>
       </div>
@@ -340,14 +340,14 @@ $('authType').onchange = () => {
 };
 function syncGoalVisibility() {
   $('goalWrap').style.display =
-    ['snaffler','full','full-domain'].includes($('preset').value) ? 'none' : '';
+    ['regex-sweep','full','full-domain'].includes($('preset').value) ? 'none' : '';
 }
 $('preset').onchange = syncGoalVisibility;
 syncGoalVisibility();   // page load: default preset (full-domain) hides Goal too
 
 $('startBtn').onclick = async () => {
   const params = {
-    preset: ['snaffler','full'].includes($('preset').value) ? $('preset').value : '',
+    preset: $('preset').value,
     goal: $('goal').value.trim(),
     host: $('host').value.trim(), dc: $('dc').value.trim(),
     domain_source: $('domainSource').value,

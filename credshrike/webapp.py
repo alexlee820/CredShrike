@@ -28,7 +28,7 @@ from .agent.loop import AgentLoop
 from .agent.session import AgentSession
 from .config import Policy
 from .credentials import Credential
-from .agent.cli_agent import SNAFFLER_PRESET, FULL_PRESET
+from .agent.cli_agent import REGEX_SWEEP_PRESET as SNAFFLER_PRESET, FULL_PRESET
 
 WEB_DIR = Path(__file__).parent / "web"
 
@@ -209,7 +209,7 @@ def _execute_run(state: RunState) -> None:
 
         goal = params.get("goal") or ""
         preset = params.get("preset") or ""
-        if preset == "snaffler" and not goal:
+        if preset in ("snaffler", "regex-sweep") and not goal:
             goal = SNAFFLER_PRESET
         elif preset == "full" and not goal:
             goal = FULL_PRESET
