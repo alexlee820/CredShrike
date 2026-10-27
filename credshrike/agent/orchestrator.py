@@ -859,7 +859,8 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
             host=host, share_name=share_name, client_factory=client_factory,
             echo=echo, emit=emit, dc=dc, domain_source=domain_source,
             sem=sem, budget_lock=budget_lock,
-            memory_block=f"({si}/{len(dumpable)}) ")
+            memory_block=f"({si}/{len(dumpable)}) ",
+            use_triage=bool(getattr(policy, "analysis_triage", False)))
         with lock:
             results[share_name] = result
 
@@ -1029,7 +1030,9 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
         echo(f" Analysis   : stream (group={policy.analysis_group_files} files/request, "
              f"reset@{int(policy.analysis_reset_ratio * 100)}%, "
              f"≤{policy.max_concurrent_llm} concurrent LLM, "
-             f"{policy.max_shares_in_flight} share(s) in flight)")
+             f"{policy.max_shares_in_flight} share(s) in flight"
+             + (", Snaffler triage" if getattr(policy, "analysis_triage", False)
+                else "") + ")")
     else:
         echo(" Analysis   : batch (dump-then-analyze, auto-split)")
     echo(f" Debug      : {'ON' if policy.debug else 'off'}")

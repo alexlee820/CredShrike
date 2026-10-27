@@ -134,7 +134,10 @@ credshrike agent --host FILE01.hackaday.lab ... --preset full
 
 ### Streaming Analysis (optional, faster wall clock)
 
-`--analysis-mode stream` pipelines each share: directory walkers push file
+`--analysis-mode stream` pipelines each share (add `--analysis-triage` to
+let Snaffler's 4-layer read/no-read rules decide which files reach the LLM:
+junk discarded, artifacts reported unread, relay files streamed — detection
+stays 100% LLM): directory walkers push file
 paths into a queue while a single per-share LLM thread reads the files itself
 and sends micro-batches (default 10 files/request). Every file must produce a
 checklist verdict in a code-side ledger — Part 1 of the report is generated

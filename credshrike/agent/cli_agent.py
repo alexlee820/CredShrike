@@ -54,6 +54,8 @@ def _load_policy(args) -> Policy:
         policy.max_concurrent_llm = int(args.max_concurrent_llm)
     if getattr(args, "max_shares_in_flight", None):
         policy.max_shares_in_flight = int(args.max_shares_in_flight)
+    if getattr(args, "analysis_triage", None) is not None:
+        policy.analysis_triage = bool(args.analysis_triage)
     if getattr(args, "concurrency", None) is not None:
         policy.read_threads = int(args.concurrency)
     if getattr(args, "mask_pii", False):
@@ -491,6 +493,14 @@ def register(subparsers) -> None:
                         "(stream mode; default 2)")
     p.add_argument("--max-shares-in-flight", type=int, default=None,
                    help="shares pipelined concurrently in stream mode (default 2)")
+    p.add_argument("--analysis-triage", dest="analysis_triage", action="store_true",
+                   default=None,
+                   help="stream mode: decide which files the LLM reads using the "
+                        "Snaffler 4-layer triage (junk discarded; artifacts like "
+                        ".kdbx/NTDS.DIT/.ssh reported WITHOUT reading; relay "
+                        "files streamed to the LLM)")
+    p.add_argument("--no-analysis-triage", dest="analysis_triage", action="store_false",
+                   help="read every non-skip-ext file (default)")
     p.add_argument("--context-limit", type=int, default=None,
                    help="your model's context window in tokens (e.g. 128000 for "
                         "GLM). When the conversation passes 75%% of it, old tool "

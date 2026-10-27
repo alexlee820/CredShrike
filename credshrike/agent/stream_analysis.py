@@ -60,7 +60,10 @@ _REDUCE_PROMPT = (
     "code-verified per-file ledger and the entity index (pseudonyms are "
     "consistent across files). Write the share report — ONLY these parts:\n"
     "PART 2: DETAILED FINDINGS — for every FOUND file, the exact items with "
-    "verbatim values.\n"
+    "verbatim values. Ledger entries marked 'artifact <tier>' are files that "
+    "ARE secrets themselves (password stores, credential/hive dumps, key "
+    "files); call each one out with its tier even though its content was "
+    "never read.\n"
     "PART 3: SUMMARY (max 150 words) — what was found, patterns, cross-file "
     "correlations visible in the entity index.\n")
 
@@ -260,14 +263,24 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
                             dc: str = "", domain_source: str = "auto",
                             memory: str = "", sem: Optional[threading.Semaphore] = None,
                             budget_lock: Optional[threading.Lock] = None,
-                            memory_block: str = "") -> dict:
+                            memory_block: str = "",
+                            use_triage: Optional[bool] = None) -> dict:
     """Same result contract as _analyze_share_batches:
-    {"report", "findings", "memory", "masked", "masked_entities", "stats"}."""
+    {"report", "findings", "memory", "masked", "masked_entities", "stats",
+     "artifacts" (use_triage only)}.
+
+    use_triage=True = the snaffler preset: the 4-layer Snaffler triage runs
+    in the walker (discard at walk time; artifacts reported WITHOUT reading;
+    relay files streamed to the LLM). Detection is 100% LLM — the only
+    regexes involved are PasteGuard masking. use_triage=False = full mode:
+    every non-skip-ext file is streamed to the LLM."""
     from ..masking import Masker, restore_findings
     from ..smb_session import SMBSession
     from .orchestrator import (_OFFICE_EXTRACTABLE, _extract_office_text,
                                _generate_share_summary, _walk_share_files)
 
+    if use_triage is None:      # not passed -> follow the policy
+        use_triage = bool(getattr(policy, "analysis_triage", False))
     emit = emit or (lambda ch, line, share=None: echo(line))
     sem = sem or api_semaphore(getattr(policy, "max_concurrent_llm", 2))
     budget_lock = budget_lock or threading.Lock()
@@ -287,15 +300,36 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     pool = session.get_read_pool(host)
     walk_result: dict = {}
 
+    artifacts_found: list[dict] = []     # triage layer 2/4 (never read)
+    triage_none: list[str] = []         # no rule matched -> skipped, not read
+
+    def _on_file(f):
+        if not use_triage:
+            q.put(f)
+            return
+        from ..patterns import triage as snaffler_triage
+        verdict = snaffler_triage(f["path"])
+        kind = verdict["kind"]
+        if kind == "relay" or (kind == "artifact" and verdict.get("read")):
+            q.put(f)                     # relay content -> LLM
+        elif kind in ("artifact", "green"):
+            artifacts_found.append(
+                {"path": f["path"], "size": f.get("size", 0),
+                 "tier": verdict.get("tier", "green"),
+                 "reason": verdict.get("reason", "")})
+        elif kind is None:
+            triage_none.append(f["path"])
+
     def _walk():
+        from ..patterns import DISCARD_EXTS
         try:
             files, dirs, skipped = _walk_share_files(
                 session.smb(host), share_name,
                 policy.dump_depth, policy.dump_max_files,
                 lambda line: say("walk", line),
-                skip_exts=set(policy.dump_skip_exts),
+                skip_exts=DISCARD_EXTS if use_triage else set(policy.dump_skip_exts),
                 conn_pool=pool, walk_threads=session.read_threads,
-                on_file=lambda f: q.put(f))
+                on_file=_on_file)
             walk_result.update(files=files, dirs=dirs, skipped=skipped)
         except Exception as exc:  # noqa: BLE001 — surfaced via result
             walk_result.update(error=str(exc), files=[], dirs=0, skipped=[])
@@ -439,6 +473,22 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     ledger.skipped_ext = walk_result.get("skipped", [])
     for f in walk_files:
         ledger.note_file(f["path"])
+
+    # triage layers 2/4: artifacts get code-generated verdicts (never read)
+    for path in triage_none:
+        ledger.record(path, "SKIPPED", "no snaffler rule matched (not read)")
+    artifact_findings: list[dict] = []
+    for entry in artifacts_found:
+        tier = entry["tier"]
+        ledger.record(entry["path"], "SKIPPED",
+                      f"artifact {tier} — {entry['reason']} (reported without reading)")
+        if tier in ("black", "red"):
+            artifact_findings.append({
+                "path": entry["path"], "category": "credential",
+                "username": None, "secret": None,
+                "note": f"artifact {tier}: {entry['reason']} — the file itself "
+                        f"is a secret store; not read",
+                "severity": "high" if tier == "black" else "medium"})
     unresolved = ledger.unresolved()
     if unresolved:
         say("ai", f"[ai] {share_name}: {len(unresolved)} file(s) UNRESOLVED — "
@@ -484,7 +534,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
               + "\n\n#### Findings & summary (AI)\n" + reduce_text)
 
     # ---- finalize: restore + tag findings ------------------------------- #
-    findings = [dict(f) for f in ledger.findings]
+    findings = [dict(f) for f in ledger.findings] + artifact_findings
     if masker is not None and policy.mask_restore:
         restore_findings(findings, masker)
     elif masker is not None:
@@ -505,15 +555,17 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     stats = {"dirs_walked": walk_result.get("dirs", 0),
              "files_seen": len(walk_files) + len(ledger.skipped_ext),
              "files_dumped": len(ledger.verdicts),
+             "files_artifacts": len(artifacts_found),
              "bytes_read": ledger.bytes_read, "errors": len(ledger.unreadable),
              "files_skipped_ext": len(ledger.skipped_ext)}
     say("system", f"[share] {host}/{share_name}: stream analysis done — "
-                  f"{stats['files_dumped']} files, "
+                  f"{stats['files_dumped']} files "
+                  f"({len(artifacts_found)} artifact(s) reported unread), "
                   f"{len(findings)} finding(s)")
     return {"report": report, "findings": findings, "memory": summary,
             "masked": sum(masker.summary().values()) if masker else 0,
             "masked_entities": masker.summary() if masker else {},
-            "stats": stats}
+            "stats": stats, "artifacts": artifacts_found}
 
 
 def _reset_budget(policy: Policy) -> int:

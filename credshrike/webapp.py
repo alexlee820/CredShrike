@@ -346,6 +346,8 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.max_concurrent_llm = int(params["max_concurrent_llm"])
     if params.get("max_shares_in_flight"):
         policy.max_shares_in_flight = int(params["max_shares_in_flight"])
+    if "analysis_triage" in params:
+        policy.analysis_triage = bool(params["analysis_triage"])
     if "mask_pii" in params:
         policy.mask_pii = bool(params["mask_pii"])
     if "mask_secrets" in params:

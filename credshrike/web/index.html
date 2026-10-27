@@ -283,6 +283,11 @@
           </select></div>
         <div class="field"><label>Concurrent LLM requests (stream)</label>
           <input id="maxConcurrentLlm" type="number" placeholder="2"/></div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="analysisTriage" style="width:auto"/>
+          <label style="margin:0" for="analysisTriage">Snaffler triage — decide which files
+            the LLM reads (junk discarded, artifacts reported unread, relay → LLM)</label>
+        </div>
       </div>
     </details>
 
@@ -375,6 +380,7 @@ $('startBtn').onclick = async () => {
     scan_max_file_bytes: $('scanMaxFileKb').value ? Math.round($('scanMaxFileKb').value * 1024) : '',
     analysis_mode: $('analysisMode').value,
     max_concurrent_llm: $('maxConcurrentLlm').value || '',
+    analysis_triage: $('analysisTriage').checked,
     mask_pii: $('maskPii').checked,
     mask_secrets: $('maskSecrets').checked,
     mask_semantic: $('maskSemantic').checked,

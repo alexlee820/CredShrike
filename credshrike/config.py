@@ -27,6 +27,11 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "analysis_reset_ratio": 0.7,        # session reset at 70% of the context budget
     "max_concurrent_llm": 2,            # global in-flight LLM requests
     "max_shares_in_flight": 2,          # shares pipelined concurrently (stream)
+    # Use the Snaffler 4-layer triage to decide WHICH files the LLM reads
+    # (stream analysis): junk discarded, artifacts (.kdbx/NTDS.DIT/.ssh/...)
+    # reported WITHOUT reading, relay files streamed to the LLM. Detection
+    # stays 100% LLM — no detection regexes in this path.
+    "analysis_triage": False,
     "result_char_cap": 8192,            # per tool_result fed to the LLM
     "max_tool_calls": 100,              # per run
     "max_total_read_bytes": 10 * 1024 * 1024,
@@ -148,6 +153,7 @@ class Policy:
     analysis_reset_ratio: float = DEFAULT_POLICY_DICT["analysis_reset_ratio"]
     max_concurrent_llm: int = DEFAULT_POLICY_DICT["max_concurrent_llm"]
     max_shares_in_flight: int = DEFAULT_POLICY_DICT["max_shares_in_flight"]
+    analysis_triage: bool = DEFAULT_POLICY_DICT["analysis_triage"]
     result_char_cap: int = DEFAULT_POLICY_DICT["result_char_cap"]
     max_tool_calls: int = DEFAULT_POLICY_DICT["max_tool_calls"]
     max_total_read_bytes: int = DEFAULT_POLICY_DICT["max_total_read_bytes"]
