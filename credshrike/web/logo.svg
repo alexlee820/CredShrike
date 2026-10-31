@@ -2,18 +2,52 @@
   <!-- CredShrike: a shrike (butcher bird) perched on a branch beside its larder
        thorn, with a key skewered on the spike. The black bandit eye-mask nods
        to PasteGuard masking. Palette = report theme. -->
+  <defs>
+    <radialGradient id="bg" cx="40%" cy="36%" r="80%">
+      <stop offset="0%" stop-color="#1b242f"/>
+      <stop offset="100%" stop-color="#0c1014"/>
+    </radialGradient>
+    <linearGradient id="body" x1="0.15" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#6cb4ff"/>
+      <stop offset="55%" stop-color="#4da3ff"/>
+      <stop offset="100%" stop-color="#3677b3"/>
+    </linearGradient>
+    <linearGradient id="wing" x1="0.2" y1="0" x2="0.6" y2="1">
+      <stop offset="0%" stop-color="#3a7cb4"/>
+      <stop offset="100%" stop-color="#22486e"/>
+    </linearGradient>
+    <linearGradient id="tail" x1="0.7" y1="0" x2="0.2" y2="1">
+      <stop offset="0%" stop-color="#2f6b9e"/>
+      <stop offset="100%" stop-color="#1d3f63"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#93a3b4"/>
+      <stop offset="100%" stop-color="#667383"/>
+    </linearGradient>
+    <linearGradient id="thorn" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#a3b0bf"/>
+      <stop offset="100%" stop-color="#74818f"/>
+    </linearGradient>
+  </defs>
+
   <!-- badge -->
-  <rect x="8" y="8" width="224" height="224" rx="46" fill="#101418" stroke="#26303a" stroke-width="2"/>
+  <rect x="8" y="8" width="224" height="224" rx="46" fill="url(#bg)" stroke="#2a3644" stroke-width="2"/>
+  <!-- soft back-glow to lift the subject off the badge -->
+  <ellipse cx="102" cy="122" rx="82" ry="72" fill="#1f2b39" opacity="0.35"/>
 
   <!-- tail: one long graduated blade with feather seams, hanging behind the branch -->
   <path d="M 80,174
            C 64,188 48,204 36,220
            C 40,226 46,225 52,220
-           C 66,208 80,193 94,180 Z" fill="#2f6b9e"/>
+           C 66,208 80,193 94,180 Z" fill="url(#tail)"/>
   <path d="M 86,182 C 74,192 62,203 52,213" fill="none" stroke="#101418" stroke-width="1.6" opacity="0.8"/>
   <path d="M 92,186 C 82,196 71,206 61,215" fill="none" stroke="#101418" stroke-width="1.6" opacity="0.8"/>
-  <!-- white outer-tail spot (shrikes show white patches at the tail tip) -->
+  <!-- white outer-tail edge and tip (shrikes flash white tail patches) -->
+  <path d="M 80,176 C 64,190 49,205 38,219" fill="none" stroke="#e8eef4" stroke-width="2.6" stroke-linecap="round" opacity="0.9"/>
+  <path d="M 92,187 C 82,197 72,207 63,215" fill="none" stroke="#dbe6f0" stroke-width="1.8" stroke-linecap="round" opacity="0.55"/>
   <path d="M 36,220 C 40,226 46,225 52,220 L 44,213 C 41,216 38,218 36,220 Z" fill="#e8eef4"/>
+  <!-- uppertail coverts: pale arc blending tail root into the rump -->
+  <path d="M 72,170 C 79,179 88,183 97,181" fill="none" stroke="#7db3e6" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
 
   <!-- body: one continuous silhouette, vent to crown -->
   <path d="M 141,88
@@ -23,18 +57,38 @@
            C 79,185 89,186 97,180
            C 110,168 122,142 138,108
            C 139,106 140,105 141,104
-           Z" fill="#4da3ff"/>
+           Z" fill="url(#body)"/>
+  <!-- darker crown cap (gray crown of a real shrike) -->
+  <path d="M 141,88 C 133,75 112,75 104,87 C 110,91 118,93 126,92 C 132,91 137,90 141,88 Z" fill="#24486e" opacity="0.9"/>
+  <!-- pale underparts: throat, breast and belly band -->
+  <path d="M 141,104
+           C 136,105.5 133,108 130,112
+           C 127,117 125,124 123,131
+           C 115,150 108,169 98,179
+           C 90,185 80,184 73,177
+           C 84,172 92,164 100,150
+           C 108,136 116,120 124,110
+           C 130,103 136,102 141,104 Z" fill="#d9e7f5" opacity="0.92"/>
 
-  <!-- folded wing, from the shoulder down the back to the primary tip -->
+  <!-- folded wing, from the shoulder down the back to layered primaries -->
   <path d="M 114,118
            C 106,128 95,141 84,153
            C 76,161 67,169 58,174
            L 66,177
            C 74,171 83,163 91,154
            C 101,143 111,130 117,121
-           C 119,117 117,116 114,118 Z" fill="#2f6b9e"/>
+           C 119,117 117,116 114,118 Z" fill="url(#wing)"/>
+  <path d="M 70,166 C 64,170 60,173 56,175 L 62,179 C 66,176 70,172 74,169 Z" fill="#1d3f63"/>
+  <path d="M 78,158 C 71,163 66,167 61,171 L 67,175 C 72,171 76,167 80,164 Z" fill="#24486e"/>
+  <path d="M 86,150 C 79,156 73,161 68,166 L 74,170 C 79,165 84,160 88,155 Z" fill="#2a5480"/>
   <path d="M 102,136 C 93,146 84,156 76,164" fill="none" stroke="#4da3ff" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
   <path d="M 108,128 C 99,138 90,148 82,158" fill="none" stroke="#4da3ff" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+  <!-- white scapular patch at the shoulder (small) -->
+  <path d="M 106,111 C 108.5,108.5 112,108 114.5,109 C 112.5,111.5 108.5,112.5 106,111 Z" fill="#dfe9f3" opacity="0.8"/>
+  <!-- feather micro-texture: faint covert seams on the breast and flank -->
+  <path d="M 128,138 C 122,146 116,154 110,162" fill="none" stroke="#b9cfe6" stroke-width="1.3" stroke-linecap="round" opacity="0.5"/>
+  <path d="M 120,152 C 115,158 110,164 105,169" fill="none" stroke="#b9cfe6" stroke-width="1.3" stroke-linecap="round" opacity="0.4"/>
+  <path d="M 112,164 C 108,168 104,172 100,175" fill="none" stroke="#b9cfe6" stroke-width="1.3" stroke-linecap="round" opacity="0.3"/>
 
   <!-- hooked bill (shrikes have a raptor-like hooked bill) -->
   <path d="M 141,88 C 149,90 157,95 163,101 C 165,104 163,108 159,108 C 152,106 146,105 141,104 Z" fill="#e8eef4"/>
@@ -52,15 +106,16 @@
   <circle cx="125.4" cy="96.5" r="0.9" fill="#ffffff"/>
 
   <!-- perch branch -->
-  <path d="M 24,195 C 60,189 120,189 176,192 C 196,193 212,195 219,198 L 219,204 C 180,200 120,198 60,199 C 46,199 34,200 24,201 Z" fill="#7d8a99"/>
+  <path d="M 24,195 C 60,189 120,189 176,192 C 196,193 212,195 219,198 L 219,204 C 180,200 120,198 60,199 C 46,199 34,200 24,201 Z" fill="url(#wood)"/>
   <path d="M 30,196 C 80,192 150,192 205,196" fill="none" stroke="#5f6b78" stroke-width="1.4" opacity="0.7"/>
+  <path d="M 44,199 C 90,196 140,195 190,198" fill="none" stroke="#525e6b" stroke-width="1" opacity="0.5"/>
 
   <!-- legs and toes wrapping the branch -->
-  <path d="M 99,177 L 97,192 M 97,192 C 93,193.5 89,194 85,193.5 M 97,192 C 96,196 92,197.5 88,197.5" fill="none" stroke="#16202b" stroke-width="3" stroke-linecap="round"/>
-  <path d="M 108,175 L 107,191 M 107,191 C 103,192.5 99,193 95,192.5 M 107,191 C 106,195 102,196.5 98,196.5" fill="none" stroke="#16202b" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 99,177 L 97,192 M 97,192 C 93,193.5 89,194 85,193.5 M 97,192 C 96,196 92,197.5 88,197.5 M 97,192 C 100,193 102,195 103,197" fill="none" stroke="#16202b" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 108,175 L 107,191 M 107,191 C 103,192.5 99,193 95,192.5 M 107,191 C 106,195 102,196.5 98,196.5 M 107,191 C 110,192 112,194 113,196" fill="none" stroke="#16202b" stroke-width="3" stroke-linecap="round"/>
 
   <!-- larder thorn rising from the branch, skewering the key -->
-  <path d="M 184,54 C 181,80 180,110 180,140 C 180,168 181,188 184,197 C 187,188 188,168 188,140 C 188,110 187,80 184,54 Z" fill="#98a6b5"/>
+  <path d="M 184,54 C 181,80 180,110 180,140 C 180,168 181,188 184,197 C 187,188 188,168 188,140 C 188,110 187,80 184,54 Z" fill="url(#thorn)"/>
   <path d="M 180,120 L 174,126 L 180,128 Z" fill="#7d8a99"/>
   <path d="M 188,162 L 198,167 L 188,170 Z" fill="#7d8a99"/>
 
@@ -70,5 +125,6 @@
     <line x1="197" y1="137" x2="226" y2="137" stroke="#ff6b6b" stroke-width="8" stroke-linecap="round"/>
     <line x1="213" y1="137" x2="213" y2="154" stroke="#ff6b6b" stroke-width="8" stroke-linecap="round"/>
     <line x1="225" y1="137" x2="225" y2="150" stroke="#ff6b6b" stroke-width="8" stroke-linecap="round"/>
+    <line x1="199" y1="139.5" x2="224" y2="139.5" stroke="#c94b4b" stroke-width="1.6" stroke-linecap="round" opacity="0.8"/>
   </g>
 </svg>
