@@ -33,7 +33,7 @@ include = ["credshrike*"]
 # the UI is a static file inside the package — without this a non-editable
 # install has no credshrike/web/index.html and "/" would 404
 [tool.setuptools.package-data]
-credshrike = ["web/*.html"]
+credshrike = ["web/*.html", "web/*.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

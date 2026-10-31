@@ -1,3 +1,5 @@
+<p align="center"><img src="credshrike/web/logo.svg" width="140" alt="CredShrike — the shrike that impales credentials"/></p>
+
 # CredShrike
 
 A **capability-limited LLM agent** for SMB enumeration and credential discovery in Active Directory environments.

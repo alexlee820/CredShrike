@@ -405,3 +405,13 @@ def test_analysis_controls_above_limits_section(client):
     limits = html.index("limits &amp; budgets")
     for cid in ("analysisMode", "analysisTriage", "maxConcurrentLlm"):
         assert f'id="{cid}"' in html and html.index(f'id="{cid}"') < limits, cid
+
+
+def test_logo_served(client):
+    r = client.get("/logo.svg")
+    assert r.status_code == 200
+    assert r.content_type.startswith("image/svg")
+    assert b"<svg" in r.data and b"#4da3ff" in r.data
+    # the UI links it as favicon and shows it in the header
+    html = client.get("/").get_data(as_text=True)
+    assert 'href="/logo.svg"' in html and 'src="/logo.svg"' in html
