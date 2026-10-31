@@ -1,4 +1,4 @@
-# AISafetySMBEnum — Complete Reference
+# CredShrike — Complete Reference
 
 ## Table of Contents
 
@@ -6,16 +6,17 @@
 2. [Presets & Workflows](#presets--workflows)
    - [full-domain (default)](#full-domain-default)
    - [full](#full)
-   - [snaffler](#snaffler)
+   - [regex-sweep (formerly snaffler)](#regex-sweep-formerly-snaffler)
    - [custom goal](#custom-goal)
-3. [Configuration Reference](#configuration-reference)
+3. [Analysis Modes & Triage](#analysis-modes--triage)
+4. [Configuration Reference](#configuration-reference)
    - [Policy YAML](#policy-yaml)
    - [CLI Flags](#cli-flags)
    - [Web UI Settings](#web-ui-settings)
-4. [Authentication](#authentication)
-5. [Context Window Management](#context-window-management)
-6. [Findings Extraction Pipeline](#findings-extraction-pipeline)
-7. [Report Output](#report-output)
+5. [Authentication](#authentication)
+6. [Context Window Management](#context-window-management)
+7. [Findings Extraction Pipeline](#findings-extraction-pipeline)
+8. [Report Output](#report-output)
 
 ---
 
@@ -136,21 +137,23 @@ anything.
 
 ---
 
-### snaffler
+### regex-sweep (formerly snaffler)
 
-**What it does:** Tier-based credential sweep (fast, regex-driven, for quick
-triage). Only opens files matching red/yellow tier extensions.
+**What it does:** Fast, cheap credential triage (renamed from `snaffler`,
+which still works as a deprecated alias — it is a canned *goal*, not a copy
+of Snaffler's tool flow). The `smb_scan_share` tool applies Snaffler's
+4-layer read/no-read rules (see [Analysis Modes & Triage](#analysis-modes--triage)),
+regex-scans the relay files, and the AI judges hits / reads data files /
+checks exposure.
 
 **Data workflow:**
 
 ```
-① Model calls smb_scan_share(host, share)          ← tier/regex sweep
-      Red tier: .kdbx .key .pem .ppk .pfx .p12 .rdp .vnc .env
-                + filenames containing "password", "secret", "id_rsa"...
-      Yellow tier: .config .xml .ps1 .bat .sql .txt .csv .json...
-      → Only tier-matching files are opened and regex-scanned
-      → Hits returned with SECRET MASKED (password = ***)
-      → Hits are PAGED (~50/page, follow next_skip)
+① Model calls smb_scan_share(host, share)
+      → 4-layer triage: discard junk, keep artifacts (report-only),
+        open relay files, green wide-net
+      → Relay files regex-scanned; hits returned SECRET-MASKED (***),
+        PAGED (~50/page, follow next_skip)
       → data_files list: every CSV/TSV/JSON opened (regex can't judge
         structured data — model must READ these itself)
 ② Model judges each hit: true/false positive
@@ -160,20 +163,11 @@ triage). Only opens files matching red/yellow tier extensions.
 ④ Findings extraction → report
 ```
 
-**Built-in regex patterns (patterns.py):**
-
-| Pattern | What it catches |
-|---------|----------------|
-| password_assignment | `password = xxx` / `pwd: xxx` |
-| pwd_assignment | `pwd = xxx` |
-| secret_assignment | `secret = xxx` |
-| connection_string_password | `Password=xxx;` in conn strings |
-| private_key_block | `-----BEGIN PRIVATE KEY-----` |
-| aws_access_key | AKIA/ASIA + 16 chars |
-| github_token | ghp_ + 36 chars |
-| slack_token | xox[baprs]- + 10+ chars |
-| azure_storage_key | AccountKey= + 60+ chars |
-| net_use_credential | `/user:DOMAIN\user password` |
+**Built-in regex patterns (patterns.py, 18):** password/pwd/secret
+assignments, connection strings, private-key blocks, AWS keys, GitHub/Slack
+tokens, Azure storage keys, `net use` credentials, JDBC/PHP/Python/DBI DB
+passwords, unattend.xml, MachineKey validation, RDP .rdg DPAPI blobs, Cisco
+enable secrets. Full set in `credshrike/patterns.py::DEFAULT_PATTERNS`.
 
 **Custom patterns:** `--scan-patterns file.yaml` or policy `scan_extra_patterns`.
 
@@ -200,6 +194,56 @@ chooses its own strategy and tools.
 
 **Guidance:** The system prompt steers the model: "review everything" tasks
 → dump tool; targeted questions → scan/read. But the model decides.
+
+---
+
+## Analysis Modes & Triage
+
+Applies to `full` / `full-domain` (not regex-sweep, which is always triage +
+regex + LLM-judgment by design).
+
+### batch (default)
+
+Each share is dumped code-side into pages (~24K chars), the model pages
+through with `smb_dump_share` / deep reads, one conversation per host.
+
+### stream
+
+Producer-consumer pipeline per share:
+
+```
+directory walkers (read_threads=10)               ← producers
+   → file-path queue
+      → per-share LLM thread                      ← single consumer
+           micro-batch: up to analysis_group_files(10) files,
+           waiting analysis_group_wait_ms(2000) for more
+           → LLM must return a checklist verdict for EVERY file
+           → code-side ShareLedger records it (coverage is enforced
+             in code — Part 1 of the report is generated FROM the ledger)
+           near context limit (analysis_reset_ratio=0.7): session resets,
+           ledger carried over into the fresh session
+   corrective + reduce passes → same report/findings as batch
+```
+
+- Detection stays 100% LLM; the walkers only move paths.
+- Shares run in parallel: up to `max_shares_in_flight` (2) concurrently, all
+  LLM calls throttled by a global `max_concurrent_llm` (2) semaphore.
+- Web UI monitor gets separate Walking/AI-thread tabs with share chips.
+
+### analysis_triage (Snaffler read/no-read rules)
+
+When on (implies stream), each discovered file is classified BEFORE any LLM
+spend — ported from Snaffler's rule set:
+
+| Layer | Verdict | Examples |
+|-------|---------|----------|
+| 1. DISCARD | skipped, listed under **Known FPs** | 27 junk extensions (.avi .dll .exe fonts…), `sceregvl.inf`, `jmxremote.password.template` |
+| 2. ARTIFACT | reported unread, severity-tiered under **Report-only files** | black: .kdbx .dmp lsass ntds.dit id_rsa running-config; red: .vmdk .ppk customsettings.ini .git-credentials; yellow: .mdf .pcap .ovpn .keytab |
+| 3. RELAY | opened + streamed to the LLM | 19 config/script/cert groups: .inf .cnf .ps1 .config .xml .json .yml .sql .py .php .js . pem .key .rdp … |
+| 4. GREEN | wide-net fallback: opened if it fits | anything else readable |
+
+Rule sets live in `credshrike/patterns.py` (`DISCARD_EXTS`, `ARTIFACT_*`,
+`RELAY_EXTS`, `triage()`).
 
 ---
 
@@ -258,6 +302,51 @@ as a starting point.
 | `dump_page_chars` | 24000 | Page target (tool char_cap is 40000) |
 | `dump_max_files` | 500 | Per share |
 
+#### Analysis mode & concurrency
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `analysis_mode` | "batch" | `batch` or `stream` (see Analysis Modes) |
+| `analysis_triage` | false | Snaffler 4-layer read/no-read rules (implies stream) |
+| `analysis_group_files` | 10 | stream: files per micro-batch request |
+| `analysis_group_wait_ms` | 2000 | stream: ms to wait before sending a short batch |
+| `analysis_reset_ratio` | 0.7 | stream: reset the session at 70% of the context limit |
+| `max_concurrent_llm` | 2 | Global LLM request semaphore |
+| `max_shares_in_flight` | 2 | stream: shares analyzed concurrently |
+| `read_threads` | 10 | Parallel SMB reads (walkers / batch reads, all presets) |
+
+#### LLM transport
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `stream` | true | SSE token streaming (auto-falls back if the endpoint rejects it) |
+| `prompt_cache` | true | `cache_control` on system+tools and the rolling last message; auto-disabled if unsupported |
+
+#### Privacy masking (PasteGuard-style)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `mask_pii` | false | Mask PII at the LLM boundary (emails, phones, cards, IBAN, VAT, IPs) |
+| `mask_secrets` | false | Mask secrets (API keys, JWTs, private keys, `*PASSWORD`/`*_SECRET` assignments, DB conn strings) |
+| `mask_restore` | true | Restore real values in the report (false = leave placeholders, max privacy) |
+| `mask_show_markers` | false | Mark masked spans in output |
+| `mask_marker_text` | "[protected]" | Marker text when enabled |
+| `mask_max_scan_chars` | 200000 | Max chars masked per content chunk |
+| `mask_allowlist` | [] | Values never masked (names/codenames) |
+| `mask_denylist` | [] | Extra literal values always masked |
+| `mask_same_length` | ["PERSON","ENV_PASSWORD","USERNAME","EMAIL_ADDRESS"] | Types replaced by same-length surrogates |
+| `mask_surrogate_style` | "name" | `name` (real-name dict) / `syllable` / `masked` |
+| `mask_surrogate_keep_initials` | true | `Alice Smith` → `Amber Scott` |
+| `mask_surrogate_min_len` | 4 | Shorter values fall back to `[[TYPE_N]]` |
+| `mask_email_domain` | "corp.local" | Surrogate email domain (`jchen@hackaday.lab` → `kford@corp.local`) |
+| `mask_netbios_domain` | "corp" | Surrogate NetBIOS domain (`HACKADAY\jchen` → `corp\kford`) |
+| `mask_semantic` | false | GLiNER semantic layer (PERSON/LOCATION/address) |
+| `mask_semantic_model` | "urchade/gliner_multi_pii-v1" | HF repo ID or local path |
+| `mask_semantic_threshold` | 0.5 | Global call threshold |
+| `mask_semantic_floors` | {} | Per-label overrides; built-in floors: person 0.90 / location 0.65 / address 0.70 |
+| `mask_semantic_max_tokens` | 384 | Inference window |
+| `mask_semantic_overlap` | 64 | Window overlap |
+
 #### Context window management
 
 | Key | Default | Description |
@@ -309,7 +398,7 @@ as a starting point.
 
 | Flag | Description |
 |------|-------------|
-| `--preset` | `full-domain` (default when bare) / `full` / `snaffler` |
+| `--preset` | `full-domain` (default when bare) / `full` / `regex-sweep` (`snaffler` = deprecated alias) |
 | `--goal` | Custom goal (skips preset, one-shot mode) |
 | `--repl` | Force interactive REPL (bare invocation defaults to full-domain) |
 | `--host` | Host scope (comma-separated for multi-host) |
@@ -330,6 +419,19 @@ as a starting point.
 | `--debug` | Show full tool results |
 | `--model` | Model override |
 | `--audit-dir` | Directory for audit logs (default: `runs/`) |
+| `--analysis-mode` | `batch` (default) / `stream` |
+| `--analysis-triage` / `--no-analysis-triage` | Snaffler read/no-read rules (implies stream) |
+| `--max-concurrent-llm` | Global LLM concurrency (default 2) |
+| `--stream` / `--no-stream` | SSE token streaming (default on) |
+| `--prompt-cache` / `--no-prompt-cache` | Prompt caching (default on) |
+| `--mask-pii` | Mask PII before it reaches the model |
+| `--mask-secrets` | Mask secrets before they reach the model |
+| `--mask-semantic` | Add GLiNER semantic layer |
+| `--mask-semantic-model` | GLiNER checkpoint override |
+| `--no-surrogates` / `--surrogate-style` | `[[TYPE_N]]` placeholders / `name`\|`syllable`\|`masked` |
+| `--no-mask-restore` | Leave placeholders in the report |
+| `--mask-email-domain` | Surrogate email domain (default `corp.local`) |
+| `--mask-netbios-domain` | Surrogate NetBIOS domain (default `corp`) |
 
 #### REPL commands
 
@@ -343,12 +445,16 @@ as a starting point.
 
 ### Web UI Settings
 
-Start with `smbenum ui` → http://127.0.0.1:8080
+Start with `credshrike ui` → http://127.0.0.1:8080 (the port auto-bumps +1,
+up to 20 tries, if it is already taken)
 
 | Section | Field | Description |
 |---------|-------|-------------|
-| Preset | Dropdown | full-domain (default) / full / snaffler / custom |
+| Preset | Dropdown | full-domain (default) / full / regex-sweep / custom |
 | Goal | Textarea | Only visible when preset = custom |
+| Analysis mode | Radio | batch / stream (main form, not advanced) |
+| Snaffler triage | Checkbox | 4-layer read/no-read rules; implies stream |
+| LLM concurrency | Number | `max_concurrent_llm` (main form) |
 | Host(s) | Input | Comma-separated; empty = unrestricted |
 | DC | Input | Domain controller hostname |
 | Directory source | Dropdown | auto (LDAP) / ldap / adws |
@@ -358,6 +464,7 @@ Start with `smbenum ui` → http://127.0.0.1:8080
 | Model | Input | e.g., glm-5.3 |
 | API endpoint | Input | e.g., https://api.z.ai/api/anthropic |
 | API key | Password | Leave empty to use env var |
+| Mask PII / secrets / semantic | Checkboxes | On by default; surrogate domains prefilled (`corp.local` / `corp`) |
 | Read gate | Dropdown + value | none / ai / size |
 | Redact literals | Input | Comma-separated |
 | Redact regex | Textarea | One per line |
@@ -365,6 +472,10 @@ Start with `smbenum ui` → http://127.0.0.1:8080
 | Computers filter | Input | full-domain: LDAP filter |
 | Max hosts | Number | full-domain: cap (0 = all) |
 | Debug | Checkbox | Show FULL tool results |
+| Advanced → limits & budgets | Numbers | reads/call, result chars, head size, max files, read budget, tool calls, wall clock, scan caps |
+
+While a run is live the page is a monitor: the event feed splits into
+**All / Walking / SMB / AI-thread** tabs with per-share filter chips.
 
 ---
 
@@ -444,7 +555,10 @@ runs/
 ```
 
 Per-host report tabs: Overview / Credentials / Findings / Sweep hits /
-Computers / Shares / SMB activity / AI report / Transcript / [Debug] / Audit
+Computers / Shares / SMB activity / AI report / Transcript / [Debug] / Audit —
+plus, with triage on, **Report-only files** (artifacts reported unread,
+severity-tiered) and **Known FPs** (rule-discarded junk), each with a count
+badge.
 
 Index report sections: Coverage matrix / Merged credentials (host filter) /
 Other findings (host filter) / Per-host AI reports

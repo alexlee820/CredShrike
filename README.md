@@ -112,7 +112,7 @@ pip install -r requirements.txt
 pip install -e ".[dev,pii]"      # tests + phonenumbers/stdnum checksums
 pip install -e ".[semantic]"     # optional GLiNER semantic masks (pulls torch)
 
-pytest                           # 158 offline tests
+pytest                           # 225 offline tests
 ```
 
 `credshrike ui` additionally needs Flask (it is in the core set above).
@@ -173,13 +173,20 @@ exposure. For LLM-only detection use full/full-domain + stream +
 ### Web UI
 
 ```bash
-credshrike ui          # → http://127.0.0.1:8080
+credshrike ui          # → http://127.0.0.1:8080 (auto-bumps +1 if the port is taken)
 ```
 
-The form includes an **advanced → limits & budgets** section (reads per call,
-tool-result chars, full-mode head size, max files, total read budget, tool
-calls, wall clock, scan caps) and an optional **policy YAML path**. Empty
-fields keep the policy/default values; everything is applied per run.
+The main form carries analysis mode (batch/stream), Snaffler triage and LLM
+concurrency alongside the connection fields; privacy masking (PII/secrets,
+same-length surrogates on) is checked by default with the surrogate email /
+NetBIOS domains prefilled. The **advanced → limits & budgets** section (reads
+per call, tool-result chars, full-mode head size, max files, total read
+budget, tool calls, wall clock, scan caps) and an optional **policy YAML
+path** stay as before — empty fields keep the policy/default values.
+
+During a run the page doubles as a live monitor: the event feed is filtered
+into **All / Walking / SMB / AI-thread** tabs with per-share filter chips,
+so you can watch directory walkers and per-share LLM threads separately.
 
 ### Manual CLI (no LLM needed)
 
@@ -323,7 +330,11 @@ runs/
 ```
 
 Per-host report tabs: Overview / Credentials / Findings / Sweep hits /
-Computers / Shares / SMB activity / AI report / Transcript / [Debug] / Audit
+Computers / Shares / SMB activity / AI report / Transcript / [Debug] / Audit —
+plus, with triage on, **Report-only files** (artifacts reported unread —
+keepass dumps, memory dumps, private keys, `ntds.dit`…) and **Known FPs**
+(rule-discarded junk), each a separate tab with a count badge so "skipped"
+never means "silently vanished".
 
 ---
 
