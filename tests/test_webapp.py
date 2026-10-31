@@ -396,3 +396,12 @@ def test_snaffler_alias_still_works(client, fake_client):
     run_id = client.post("/api/runs", json=_params(preset="snaffler", goal="")).get_json()["id"]
     s = _wait_status(client, run_id, {"done", "stopped", "error"}, timeout=15)
     assert s["status"] in ("done", "stopped"), s.get("error")
+
+
+def test_analysis_controls_above_limits_section(client):
+    """Analysis mode / Snaffler triage live in the main form, not buried in
+    the collapsible limits & budgets section."""
+    html = client.get("/").get_data(as_text=True)
+    limits = html.index("limits &amp; budgets")
+    for cid in ("analysisMode", "analysisTriage", "maxConcurrentLlm"):
+        assert f'id="{cid}"' in html and html.index(f'id="{cid}"') < limits, cid
