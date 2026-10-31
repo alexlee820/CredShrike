@@ -1,8 +1,12 @@
-<p align="center"><img src="credshrike/web/logo.svg" width="140" alt="CredShrike — the shrike that impales credentials"/></p>
+<p align="center">
+  <img src="credshrike/web/logo.svg" width="180" alt="CredShrike logo — a shrike perched on a branch beside a thorn with a key skewered on it"/>
+</p>
 
-# CredShrike
+<h1 align="center">CredShrike</h1>
 
-A **capability-limited LLM agent** for SMB enumeration and credential discovery in Active Directory environments.
+<p align="center">
+  A <strong>capability-limited LLM agent</strong> for SMB enumeration and credential discovery in Active Directory environments.
+</p>
 
 > **Why "CredShrike"?** The shrike (butcher bird) pins its prey on thorns to
 > save for later — CredShrike pins discovered credentials in your report,
