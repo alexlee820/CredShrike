@@ -153,6 +153,8 @@
         <input id="apiBaseUrl" placeholder="https://api.deepseek.com/anthropic"/></div>
       <div class="field"><label>API key (optional — else ANTHROPIC_API_KEY)</label>
         <input id="apiKey" type="password" placeholder="sk-..."/></div>
+      <div class="field"><label>SOCKS proxy (optional — SMB/LDAP/ADWS only, LLM direct)</label>
+        <input id="socksProxy" placeholder="socks5h://127.0.0.1:1080"/></div>
       <div class="field" style="flex-direction:row;align-items:center;gap:8px">
         <input type="checkbox" id="streamMode" style="width:auto" checked/>
         <label style="margin:0" for="streamMode">Stream tokens (SSE) — live output;
@@ -365,6 +367,7 @@ $('startBtn').onclick = async () => {
     model: $('model').value.trim(),
     api_base_url: $('apiBaseUrl').value.trim(),
     api_key: $('apiKey').value.trim(),
+    socks_proxy: $('socksProxy').value.trim(),
     debug: $('debugMode').checked,
     stream: $('streamMode').checked,
     prompt_cache: $('promptCache').checked,

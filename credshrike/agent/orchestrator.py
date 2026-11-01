@@ -999,6 +999,7 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
         f"--skip-exts '{','.join(policy.dump_skip_exts[:6])}...'" if policy.dump_skip_exts else "",
         f"--analysis-mode {policy.analysis_mode}" if getattr(policy, "analysis_mode", "batch") != "batch" else "",
         f"--max-concurrent-llm {policy.max_concurrent_llm}" if getattr(policy, "max_concurrent_llm", 2) != 2 else "",
+        f"--socks-proxy {policy.socks_proxy}" if getattr(policy, "socks_proxy", "") else "",
         "--debug" if policy.debug else "",
     ]
     cli_cmd = " \\\n  ".join(p for p in cmd_parts if p)
@@ -1010,6 +1011,8 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     echo(f" DC         : {dc or '(not set)'}")
     echo(f" Transport  : {'adws (net.tcp 9389)' if domain_source == 'adws' else 'ldap (389)' if domain_source == 'ldap' else 'auto → ldap'}")
     echo(f" Model      : {policy.model} @ {policy.api_base_url or 'api.anthropic.com'}")
+    if getattr(policy, "socks_proxy", ""):
+        echo(f" SOCKS      : {policy.socks_proxy} (SMB/LDAP/ADWS only — LLM direct)")
     echo(f" Concurrency: {concurrency} thread(s) (parallel file reads)")
     echo(f" Skip exts  : {len(policy.dump_skip_exts)} types" +
          (f" ({', '.join(policy.dump_skip_exts[:5])}...)" if policy.dump_skip_exts else " (none)"))

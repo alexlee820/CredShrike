@@ -129,6 +129,11 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # prefill for an identical prefix (~0.1x input cost, lower TTFT).
     # Transparent; disabled automatically if the endpoint rejects it.
     "prompt_cache": True,
+    # SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos ONLY — the LLM API calls
+    # stay direct (unlike proxychains, which tunnels the whole process).
+    # socks5:// (local DNS) / socks5h:// (DNS at the proxy) / socks4:// /
+    # http://[CONNECT], optional user:pass@. Empty = direct connection.
+    "socks_proxy": "",
     # --- context-window management ------------------------------------------
     "context_token_limit": 0,       # 0 = auto-manage off (set your model's
                                     # window, e.g. 128000 for GLM, 1000000 for
@@ -206,6 +211,7 @@ class Policy:
     debug: bool = DEFAULT_POLICY_DICT["debug"]
     stream: bool = DEFAULT_POLICY_DICT["stream"]
     prompt_cache: bool = DEFAULT_POLICY_DICT["prompt_cache"]
+    socks_proxy: str = DEFAULT_POLICY_DICT["socks_proxy"]
     context_token_limit: int = DEFAULT_POLICY_DICT["context_token_limit"]
     compact_at_ratio: float = DEFAULT_POLICY_DICT["compact_at_ratio"]
     compact_keep_recent: int = DEFAULT_POLICY_DICT["compact_keep_recent"]

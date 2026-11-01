@@ -12,6 +12,7 @@ pycryptodomex>=3.19        # vendored ADWS net.tcp NegotiateStream (RC4/HMAC)
 pyasn1>=0.5                # ADWS binary XML / NMF encoding
 PyYAML>=6.0                # policy + credential profiles
 dnspython>=2.4             # KDC / DC SRV discovery
+PySocks>=1.7               # --socks-proxy: SMB/LDAP/ADWS via SOCKS, LLM direct
 
 # --- core: LLM agent + local web UI ---------------------------------------
 anthropic>=0.100           # also used against Anthropic-compatible endpoints

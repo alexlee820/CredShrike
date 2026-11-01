@@ -38,6 +38,11 @@ def add_auth_args(parser: argparse.ArgumentParser) -> None:
     g.add_argument("--ticket", help="Kerberos ticket file (.ccache or .kirbi)")
     g.add_argument("--kdc", help="KDC override (host[:port]) for Kerberos auth")
     g.add_argument("--timeout", type=int, default=30, help="SMB timeout seconds (default 30)")
+    g.add_argument("--socks-proxy", default=None, metavar="URL",
+                   help="SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos ONLY — "
+                        "LLM API calls stay direct (unlike proxychains). "
+                        "socks5:// socks5h:// (DNS at the proxy) socks4:// "
+                        "http://[user:pass@]host:port")
 
 
 def build_credential(args) -> Credential:
@@ -310,6 +315,11 @@ def main(argv=None) -> int:
             pass
     parser = build_parser()
     args = parser.parse_args(argv)
+    # manual smb/domain commands: route SMB/LDAP/ADWS through the proxy
+    # before anything connects (agent mode re-applies from its policy)
+    if getattr(args, "socks_proxy", None):
+        from .socks_proxy import apply_socks_proxy
+        apply_socks_proxy(args.socks_proxy)
     try:
         args.func(args)
         return 0

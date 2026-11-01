@@ -321,6 +321,7 @@ as a starting point.
 |-----|---------|-------------|
 | `stream` | true | SSE token streaming (auto-falls back if the endpoint rejects it) |
 | `prompt_cache` | true | `cache_control` on system+tools and the rolling last message; auto-disabled if unsupported |
+| `socks_proxy` | "" | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos **only** — LLM API calls stay direct (unlike proxychains, which tunnels the whole process). `socks5://` (local DNS) / `socks5h://` (DNS at the proxy) / `socks4://` / `http://`, optional `user:pass@`. Patched modules: `impacket.nmb`, `impacket.ldap.ldap`, `impacket.krb5.kerberosv5`, the vendored ADWS client, the reachability probe |
 
 #### Privacy masking (PasteGuard-style)
 
@@ -432,6 +433,7 @@ as a starting point.
 | `--no-mask-restore` | Leave placeholders in the report |
 | `--mask-email-domain` | Surrogate email domain (default `corp.local`) |
 | `--mask-netbios-domain` | Surrogate NetBIOS domain (default `corp`) |
+| `--socks-proxy` | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos only — LLM direct (`socks5h://` = DNS at the proxy); shared across smb/domain/agent subcommands |
 
 #### REPL commands
 
@@ -464,6 +466,7 @@ up to 20 tries, if it is already taken)
 | Model | Input | e.g., glm-5.3 |
 | API endpoint | Input | e.g., https://api.z.ai/api/anthropic |
 | API key | Password | Leave empty to use env var |
+| SOCKS proxy | Input | `socks5h://127.0.0.1:1080` — SMB/LDAP/ADWS only, LLM direct |
 | Mask PII / secrets / semantic | Checkboxes | On by default; surrogate domains prefilled (`corp.local` / `corp`) |
 | Read gate | Dropdown + value | none / ai / size |
 | Redact literals | Input | Comma-separated |

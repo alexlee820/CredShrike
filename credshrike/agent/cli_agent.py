@@ -77,6 +77,8 @@ def _load_policy(args) -> Policy:
         policy.mask_email_domain = args.mask_email_domain
     if getattr(args, "mask_netbios_domain", None):
         policy.mask_netbios_domain = args.mask_netbios_domain
+    if getattr(args, "socks_proxy", None):
+        policy.socks_proxy = args.socks_proxy
     if getattr(args, "skip_exts", None) is not None:
         raw = args.skip_exts.strip().lower()
         if raw == "none" or raw == "":
@@ -204,6 +206,11 @@ def cmd_agent(args) -> None:
     policy = _load_policy(args)
     concurrency = args.concurrency if args.concurrency is not None else policy.read_threads
     preset = _resolve_preset(args)
+
+    # SMB/LDAP/ADWS/Kerberos through the proxy, LLM API calls stay direct
+    if policy.socks_proxy:
+        from ..socks_proxy import apply_socks_proxy
+        apply_socks_proxy(policy.socks_proxy)
 
     # config banner for EVERY preset (full-domain, full, snaffler, custom)
     from .orchestrator import _print_config_banner

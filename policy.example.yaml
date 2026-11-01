@@ -158,3 +158,10 @@ policy:
   # Anthropic prompt caching (cache_control): reuse provider-side prefill
   # for an identical prefix. Transparent; auto-disabled if unsupported.
   prompt_cache: true
+  # SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos ONLY — LLM API calls to
+  # api_base_url stay DIRECT (unlike proxychains, which tunnels the whole
+  # process including the AI provider traffic).
+  #   socks5://127.0.0.1:1080     local DNS
+  #   socks5h://user:pass@ip:1080 hostname resolved at the proxy
+  # CLI: --socks-proxy
+  socks_proxy: ""

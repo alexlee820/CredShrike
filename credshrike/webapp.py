@@ -139,6 +139,11 @@ def _execute_run(state: RunState) -> None:
         policy = Policy.load(params.get("policy_path") or None)
         _apply_policy_overrides(policy, params)
 
+        # SMB/LDAP/ADWS through the pivot proxy, LLM API calls stay direct
+        if policy.socks_proxy:
+            from .socks_proxy import apply_socks_proxy
+            apply_socks_proxy(policy.socks_proxy)
+
         # default preset: bare runs (no preset AND no goal) → full-domain sweep
         effective_preset = params.get("preset") or \
             ("" if params.get("goal") else "full-domain")
@@ -365,6 +370,8 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
         policy.mask_surrogate_style = params["surrogate_style"]
     if params.get("mask_email_domain"):
         policy.mask_email_domain = params["mask_email_domain"]
+    if params.get("socks_proxy"):
+        policy.socks_proxy = params["socks_proxy"]
     if params.get("mask_netbios_domain"):
         policy.mask_netbios_domain = params["mask_netbios_domain"]
     if params.get("mask_semantic_model"):

@@ -212,6 +212,31 @@ credshrike domain computers --dc DC01 --source adws --user u --domain d --passwo
 
 ---
 
+## Pivoting Through a SOCKS Proxy
+
+Don't wrap CredShrike in `proxychains` — it tunnels the **whole process**
+(LD_PRELOAD on `connect()`), so your LLM API calls get dragged through the
+pivot too: they fail when the pivot has no internet egress, and egress from
+the client network when it does. CredShrike has native split routing
+instead:
+
+```bash
+credshrike agent --preset full --host filesrv01 ... \
+    --socks-proxy socks5h://127.0.0.1:1080
+```
+
+- SMB (445), LDAP (389/636), ADWS (9389) and Kerberos go through the proxy;
+  **AI provider traffic stays direct** on your operator egress.
+- `socks5h://` resolves target hostnames **at the proxy** (use when your box
+  can't resolve the target domain); `socks5://` resolves locally. `socks4://`
+  and `http://` (CONNECT) are also accepted, with optional `user:pass@`.
+- Also available in the web UI (connection section) and as policy key
+  `socks_proxy` (`policy.example.yaml`).
+- Quick standalone check:
+  `python -m credshrike.socks_proxy socks5h://127.0.0.1:1080 10.0.0.5 445`
+
+---
+
 ## Safety Model (Summary)
 
 | Layer | Mechanism |

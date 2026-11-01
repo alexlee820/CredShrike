@@ -13,6 +13,7 @@ dependencies = [
     "pyasn1>=0.5",           # ADWS binary XML / NMF encoding
     "PyYAML>=6.0",
     "dnspython>=2.4",
+    "PySocks>=1.7",         # --socks-proxy: SMB/LDAP/ADWS via SOCKS, LLM direct
     "anthropic>=0.100",
     "Flask>=2.3",            # `credshrike ui`
 ]
