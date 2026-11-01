@@ -41,6 +41,16 @@ def _esc_cap(value, cap: int = 160) -> str:
     return text
 
 
+def _note_cell(value, cap: int = 160) -> str:
+    """Note cell: capped text so a long LLM note cannot blow up the row —
+    the full note rides along in the hover title."""
+    full = _esc(value)
+    shown = _esc_cap(value, cap)
+    if shown == full:
+        return f"<td>{full}</td>"
+    return f"<td title='{full}'>{shown}</td>"
+
+
 def _secret_cell(value: Optional[str]) -> str:
     if not value:
         return "<td class='dim'>—</td>"
@@ -183,7 +193,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
         f"<tr><td><span class='sev {f['severity']}'>{f['severity']}</span></td>"
         f"<td>{_esc(f['category'])}</td>"
         f"<td class='path'>{_esc(f.get('host'))}/{_esc(f.get('share'))}/{_esc(f.get('path'))}</td>"
-        f"<td>{_esc_cap(f.get('note'))}</td><td class='dim ev'>{_esc_cap(f.get('evidence'))}</td>"
+        f"<td>{_note_cell(f.get('note'))}</td><td class='dim ev'>{_esc_cap(f.get('evidence'))}</td>"
         f"{_mask_cell(f)}</tr>"
         for f in _sort_findings(findings)) or "<tr><td colspan='6' class='dim'>none</td></tr>"
 
@@ -267,11 +277,18 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   .tile span {{ color:var(--dim); font-size:11px; text-transform:uppercase; }}
   table {{ width:100%; border-collapse:collapse; background:var(--panel);
           border:1px solid var(--line); border-radius:8px; overflow:hidden; }}
-  th, td {{ padding:7px 10px; text-align:left; border-bottom:1px solid var(--line); font-size:13px; }}
+  th, td {{ padding:7px 10px; text-align:left; vertical-align:top;
+       border-bottom:1px solid var(--line); font-size:13px; }}
   th {{ color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.5px;
        background:#12171d; }}
   td, th, pre, .path, .mono, .secret, .say, .call, .ev {{
       overflow-wrap:anywhere; word-break:break-word; max-width:520px; }}
+  /* findings table: fixed columns so a long note can never re-flow the
+     severity/category cells; cells top-aligned inside tall rows */
+  #findTable {{ table-layout: fixed; }}
+  #findTable th:nth-child(1){{width:9%}} #findTable th:nth-child(2){{width:13%}}
+  #findTable th:nth-child(3){{width:28%}} #findTable th:nth-child(4){{width:24%}}
+  #findTable th:nth-child(5){{width:16%}} #findTable th:nth-child(6){{width:10%}}
   tr:last-child td {{ border-bottom:0; }}
   .dim {{ color:var(--dim); }} .mono {{ font-family:Consolas,monospace; font-size:12px; }}
   .path {{ font-family:Consolas,monospace; font-size:12px; color:#b9d4f0; }}
@@ -376,7 +393,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
 
 <div class="tab-panel" id="findings">
   <h2>All findings</h2>
-  <table><tr><th>severity</th><th>category</th><th>location</th><th>note</th><th>evidence</th>
+  <table id="findTable"><tr><th>severity</th><th>category</th><th>location</th><th>note</th><th>evidence</th>
   <th>PasteGuard</th></tr>
   {findings_rows}</table>
 </div>
@@ -564,7 +581,7 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
         f"<td>{_esc(f['category'])}</td>"
         f"<td class='path'>{_esc(f['locations'][0]['host'])}/{_esc(f['locations'][0]['share'])}"
         f"/{_esc(f['locations'][0]['path'])}</td>"
-        f"<td>{_esc(f.get('note', ''))}</td>{_mask_cell(f)}</tr>"
+        f"<td>{_note_cell(f.get('note', ''))}</td>{_mask_cell(f)}</tr>"
         for f in merged.get("other", [])) or \
         "<tr><td colspan='5' class='dim'>none</td></tr>"
 
@@ -596,11 +613,15 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
            border-radius:6px; padding:6px 10px; font:inherit; margin:10px 0; }}
   table {{ width:100%; border-collapse:collapse; background:var(--panel);
           border:1px solid var(--line); border-radius:8px; overflow:hidden; }}
-  th, td {{ padding:7px 10px; text-align:left; border-bottom:1px solid var(--line); font-size:13px; }}
+  th, td {{ padding:7px 10px; text-align:left; vertical-align:top;
+       border-bottom:1px solid var(--line); font-size:13px; }}
   th {{ color:var(--dim); font-size:11px; text-transform:uppercase; background:#12171d; }}
   td, th, pre, .path, .mono, .secret, .ev {{
       overflow-wrap:anywhere; word-break:break-word; max-width:520px; }}
   table {{ table-layout: fixed; }}
+  #otherTable th:nth-child(1){{width:9%}} #otherTable th:nth-child(2){{width:13%}}
+  #otherTable th:nth-child(3){{width:30%}} #otherTable th:nth-child(4){{width:40%}}
+  #otherTable th:nth-child(5){{width:8%}}
   #credTable th:nth-child(1){{width:8%}} #credTable th:nth-child(2){{width:15%}}
   #credTable th:nth-child(3){{width:19%}} #credTable th:nth-child(4){{width:32%}}
   #credTable th:nth-child(5){{width:16%}} #credTable th:nth-child(6){{width:10%}}
@@ -643,7 +664,7 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
 <th>locations</th><th>evidence</th><th>PasteGuard</th></tr>{cred_rows}</table>
 
 <h2>Other findings</h2>
-<table><tr><th>severity</th><th>category</th><th>location</th><th>note</th>
+<table id="otherTable"><tr><th>severity</th><th>category</th><th>location</th><th>note</th>
 <th>PasteGuard</th></tr>{other_rows}</table>
 
 <h2>Per-host AI reports</h2>

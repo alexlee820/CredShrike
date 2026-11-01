@@ -256,3 +256,35 @@ def test_union_dedupes_same_credential():
     assert len(merged) == 1
     assert merged[0]["severity"] == "high"            # max severity wins
     assert "e1" in merged[0]["evidence"] and "e2" in merged[0]["evidence"]
+
+
+def test_long_note_cannot_break_findings_layout():
+    """A monster LLM note must not re-flow severity/category cells:
+    the index used _esc (uncapped) for notes; both templates now pin the
+    findings tables to fixed columns + top-aligned cells, and cap the note
+    with the full text in the hover title."""
+    import re
+    from credshrike.report import build_domain_index_html, build_report_html
+
+    note = "Credential exposure confirmed via plaintext assignment. " * 60
+    findings = [{"severity": "high", "category": "credential", "host": "FS01",
+                 "share": "CTF$", "path": "creds.txt", "note": note,
+                 "evidence": "password=..."}]
+    html = build_report_html(context={"principal": "demo"}, findings=findings,
+                             scan_results=[], flagged=[], report_md="", audit_path="")
+    assert 'id="findTable"' in html
+    assert "#findTable" in html and "table-layout: fixed" in html
+    assert "vertical-align:top" in html
+    # capped shown text (<=170 chars incl. ellipsis) + full note in the title
+    assert re.search(r"<td title='[^']{1000,}'>(.{1,170})…</td>", html)
+
+    merged = {"other": [{"severity": "medium", "category": "pii",
+                         "locations": [{"host": "FS01", "share": "CTF$",
+                                        "path": "hr.csv"}], "note": note}]}
+    idx = build_domain_index_html(context={"principal": "demo"}, hosts=[],
+                                  merged=merged, computers=[])
+    assert 'id="otherTable"' in idx
+    assert "vertical-align:top" in idx
+    # index note cell capped the same way (this is the regression: it used
+    # to render all ~3400 chars raw into the cell)
+    assert re.search(r"<td title='[^']{1000,}'>(.{1,170})…</td>", idx)
