@@ -275,6 +275,11 @@ def test_long_note_cannot_break_findings_layout():
     assert 'id="findTable"' in html
     assert "#findTable" in html and "table-layout: fixed" in html
     assert "vertical-align:top" in html
+    # severity pills must never break mid-word (a narrow window used to
+    # split "medium" into MEDI/UM and shove the pill down) — nowrap wins
+    # over overflow-wrap:anywhere, and the column gets a fixed 90px floor
+    assert "white-space:nowrap" in html and html.count("white-space:nowrap") >= 2
+    assert "#findTable th:nth-child(1){width:90px}" in html.replace("{{", "{").replace("}}", "}") or            "#findTable th:nth-child(1){{width:90px}}" in html
     # capped shown text (<=170 chars incl. ellipsis) + full note in the title
     assert re.search(r"<td title='[^']{1000,}'>(.{1,170})…</td>", html)
 

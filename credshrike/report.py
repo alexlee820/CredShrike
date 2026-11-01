@@ -286,14 +286,14 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   /* findings table: fixed columns so a long note can never re-flow the
      severity/category cells; cells top-aligned inside tall rows */
   #findTable {{ table-layout: fixed; }}
-  #findTable th:nth-child(1){{width:9%}} #findTable th:nth-child(2){{width:13%}}
-  #findTable th:nth-child(3){{width:28%}} #findTable th:nth-child(4){{width:24%}}
-  #findTable th:nth-child(5){{width:16%}} #findTable th:nth-child(6){{width:10%}}
+  #findTable th:nth-child(1){{width:90px}} #findTable th:nth-child(2){{width:12%}}
+  #findTable th:nth-child(3){{width:26%}} #findTable th:nth-child(4){{width:26%}}
+  #findTable th:nth-child(5){{width:16%}} #findTable th:nth-child(6){{width:9%}}
   tr:last-child td {{ border-bottom:0; }}
   .dim {{ color:var(--dim); }} .mono {{ font-family:Consolas,monospace; font-size:12px; }}
   .path {{ font-family:Consolas,monospace; font-size:12px; color:#b9d4f0; }}
   .ev {{ font-size:11px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-  .sev {{ padding:1px 8px; border-radius:9px; font-size:11px; font-weight:600; color:#101418; }}
+  .sev {{ padding:1px 8px; border-radius:9px; font-size:11px; font-weight:600; color:#101418; white-space:nowrap; }}
   .sev.high {{ background:#ff6b6b; }} .sev.medium {{ background:#ffb84d; }}
   .sev.low {{ background:#4da3ff; }}
   .pg {{ display:inline-block; padding:1px 7px; border-radius:9px; font-size:10px;
@@ -619,8 +619,8 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
   td, th, pre, .path, .mono, .secret, .ev {{
       overflow-wrap:anywhere; word-break:break-word; max-width:520px; }}
   table {{ table-layout: fixed; }}
-  #otherTable th:nth-child(1){{width:9%}} #otherTable th:nth-child(2){{width:13%}}
-  #otherTable th:nth-child(3){{width:30%}} #otherTable th:nth-child(4){{width:40%}}
+  #otherTable th:nth-child(1){{width:90px}} #otherTable th:nth-child(2){{width:12%}}
+  #otherTable th:nth-child(3){{width:30%}} #otherTable th:nth-child(4){{width:39%}}
   #otherTable th:nth-child(5){{width:8%}}
   #credTable th:nth-child(1){{width:8%}} #credTable th:nth-child(2){{width:15%}}
   #credTable th:nth-child(3){{width:19%}} #credTable th:nth-child(4){{width:32%}}
@@ -630,7 +630,7 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
   tr:last-child td {{ border-bottom:0; }}
   .dim {{ color:var(--dim); }} .path {{ font-family:Consolas,monospace; font-size:12px; color:#b9d4f0; }}
   .ev {{ font-size:11px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-  .sev {{ padding:1px 8px; border-radius:9px; font-size:11px; font-weight:600; color:#101418; }}
+  .sev {{ padding:1px 8px; border-radius:9px; font-size:11px; font-weight:600; color:#101418; white-space:nowrap; }}
   .sev.high {{ background:#ff6b6b; }} .sev.medium {{ background:#ffb84d; }} .sev.low {{ background:#4da3ff; }}
   .secret {{ font-family:Consolas,monospace; }}
   .reveal {{ background:#22303d; color:var(--fg); border:0; border-radius:4px;
