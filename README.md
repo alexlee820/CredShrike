@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="credshrike/web/logo.svg" width="180" alt="CredShrike logo — a shrike perched on a branch beside a thorn with a key skewered on it"/>
+  <img src="credshrike/web/credshrike.png" width="180" alt="CredShrike logo — a shrike perched on a branch beside a thorn with a key skewered on it"/>
 </p>
 
 <h1 align="center">CredShrike</h1>

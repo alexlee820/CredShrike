@@ -418,9 +418,9 @@ def _apply_policy_overrides(policy: Policy, params: dict) -> None:
 # --------------------------------------------------------------------------- #
 # routes
 # --------------------------------------------------------------------------- #
-@app.route("/logo.svg")
+@app.route("/logo.png")
 def logo():
-    return send_from_directory(WEB_DIR, "logo.svg", mimetype="image/svg+xml")
+    return send_from_directory(WEB_DIR, "credshrike.png", mimetype="image/png")
 
 
 @app.route("/")

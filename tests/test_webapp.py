@@ -420,13 +420,13 @@ def test_analysis_controls_above_limits_section(client):
 
 
 def test_logo_served(client):
-    r = client.get("/logo.svg")
+    r = client.get("/logo.png")
     assert r.status_code == 200
-    assert r.content_type.startswith("image/svg")
-    assert b"<svg" in r.data and b"#4da3ff" in r.data
+    assert r.content_type.startswith("image/png")
+    assert r.data[:8] == bytes([0x89]) + b'PNG\r\n\x1a\n'     # PNG magic
     # the UI links it as favicon and shows it in the header
     html = client.get("/").get_data(as_text=True)
-    assert 'href="/logo.svg"' in html and 'src="/logo.svg"' in html
+    assert 'href="/logo.png"' in html and 'src="/logo.png"' in html
 
 
 def test_runs_history_lists_resumable(tmp_path, client):
