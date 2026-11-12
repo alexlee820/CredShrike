@@ -112,7 +112,7 @@ policy:
   # stream: walkers list dirs -> ONE LLM thread per share reads files itself
   # and sends micro-batches (group_files per request); a code-side ledger
   # guarantees every file gets a verdict. Shares run pipelined.
-  analysis_mode: batch            # batch | stream  (CLI: --analysis-mode)
+  analysis_mode: stream           # stream (default) | batch  (CLI: --analysis-mode)
   analysis_group_files: 10        # K files per LLM request (stream)
   analysis_group_wait_ms: 2000    # wait this long to fill a group (stream)
   analysis_reset_ratio: 0.7       # session reset threshold (stream)
@@ -121,7 +121,8 @@ policy:
   # Decide WHICH files the LLM reads with the Snaffler 4-layer triage:
   # junk discarded, artifacts (.kdbx/NTDS.DIT/.ssh/...) reported unread,
   # relay files streamed to the LLM. Detection stays 100% LLM.
-  analysis_triage: false
+  analysis_triage: true           # Snaffler read/no-read rules (default on;
+                                   # implies stream)
 
   # --- parallel SMB reads + full-content dump caps -------------------------
   read_threads: 10                # parallel reads per share (CLI --concurrency)

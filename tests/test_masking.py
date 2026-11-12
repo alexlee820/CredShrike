@@ -242,6 +242,8 @@ def test_domain_sweep_masks_dump_and_restores_report(tmp_path, monkeypatch):
                 SimpleNamespace(type="text", text="Summary: [[API_KEY_AWS_1]]")])
 
     policy = Policy()
+    policy.analysis_mode = "batch"     # this test exercises the batch path
+    policy.analysis_triage = False
     policy.mask_secrets = True
     result = run_domain_sweep(
         credential=__import__("credshrike.credentials", fromlist=["Credential"])

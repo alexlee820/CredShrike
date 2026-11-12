@@ -461,7 +461,7 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
                            host: str, share_name: str,
                            file_entries: list[dict], client_factory,
                            echo, dc: str = "", domain_source: str = "auto",
-                           memory: str = "") -> dict:
+                           memory: str = "", focus: str = "") -> dict:
     """Analyze one share's dump, auto-splitting into multiple requests when
     the content exceeds the model's context window (instead of truncating).
     Each batch runs in a FRESH context window; a rolling summary carries
@@ -520,6 +520,9 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
             host=host, share=share_name,
             n_files=len(batch), size_kb=batch_chars // 1024,
             memory_block=memory_block, incomplete="")
+        if focus:
+            goal += ("\nOPERATOR FOCUS — the scope is fixed, but pay special "
+                     f"attention to: {focus}\n")
         dump_text = _render_dump_text(batch, share_name)
         if masker is not None:
             dump_text, hits = masker.mask_text(dump_text)
@@ -685,6 +688,14 @@ def _port_open(host: str, port: int = 445, timeout: float = 3.0) -> bool:
         return False
 
 
+def _effective_analysis_mode(policy) -> str:
+    """Triage rules only exist in the stream walkers, so analysis_triage
+    implies stream regardless of what analysis_mode says."""
+    if getattr(policy, "analysis_triage", False):
+        return "stream"
+    return getattr(policy, "analysis_mode", "batch")
+
+
 def _resolve_computers(credential: Credential, dc: str, domain_source: str,
                        computers_filter: str, source_override=None) -> list:
     """Domain computer list, code-side (deterministic — no LLM involved).
@@ -745,7 +756,7 @@ def merge_findings(all_findings: list[dict]) -> dict:
 def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
                     policy: Policy, dc: str, domain_source: str, computers: list,
                     client_factory, echo, read_threads: int = 10,
-                    emit=None, state_store=None) -> None:
+                    emit=None, state_store=None, focus: str = "") -> None:
     """Sweep ONE host using PER-SHARE context windows. File reads within each
     share use ThreadPoolExecutor (SMB I/O parallelism). LLM analysis is
     sequential (one share at a time — avoids rate-limit storms) in batch
@@ -767,12 +778,12 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         echo(f"[domain] {host}: {len(dumpable)} share(s) to analyze "
              f"({', '.join(s['name'] for s in dumpable)})")
 
-        if getattr(policy, "analysis_mode", "batch") == "stream":
+        if _effective_analysis_mode(policy) == "stream":
             _sweep_one_host_stream(entry, host, credential, policy, dc,
                                    domain_source, dumpable, session, audit,
                                    client_factory, echo, emit,
                                    computers=[c.to_dict() for c in computers],
-                                   state_store=state_store)
+                                   state_store=state_store, focus=focus)
             return
 
         all_findings: list[dict] = []
@@ -820,7 +831,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             result = _analyze_share_batches(
                 credential, policy, audit, host, share_name, file_entries,
                 client_factory, echo, dc=dc, domain_source=domain_source,
-                memory=memory)
+                memory=memory, focus=focus)
             share_report = result["report"]
             memory = result["memory"]
             masked_total += int(result.get("masked", 0))
@@ -867,7 +878,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
 def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
                            dumpable, session, audit, client_factory, echo, emit,
-                           computers=None, state_store=None):
+                           computers=None, state_store=None, focus: str = ""):
     """stream mode: shares pipelined (each = walkers + one LLM thread),
     bounded by max_shares_in_flight and a global LLM request semaphore."""
     from concurrent.futures import ThreadPoolExecutor
@@ -909,6 +920,7 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
             sem=sem, budget_lock=budget_lock,
             memory_block=f"({si}/{len(dumpable)}) ",
             use_triage=bool(getattr(policy, "analysis_triage", False)),
+            focus=focus,
             resume=resume_ledger,
             state_sink=(lambda snap: state_store.save(host, share_name, snap))
             if state_store is not None else None)
@@ -1006,7 +1018,8 @@ def _finish_host_report(entry, host, session, audit, policy,
 
 def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                            domain_source, computers, client_factory, echo,
-                           read_threads=10, emit=None, state_store=None):
+                           read_threads=10, emit=None, state_store=None,
+                           focus: str = ""):
     """Sweep one host with transient-error retry. Fills entry fields on
     success; records errors."""
     echo(f"[domain] {host}: START sweep")
@@ -1022,7 +1035,7 @@ def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
             _sweep_one_host(entry, host, run_dir, credential, policy, dc,
                             domain_source, computers, client_factory, echo,
                             read_threads=read_threads, emit=emit,
-                            state_store=state_store)
+                            state_store=state_store, focus=focus)
             return
         except Exception as exc:  # noqa: BLE001
             message = str(exc).lower()
@@ -1109,7 +1122,7 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     echo(f" Budget     : {policy.max_tool_calls} calls / {policy.max_total_read_bytes // 1048576} MiB / {policy.wall_clock_seconds}s")
     echo(f" Streaming  : {'SSE (live output, auto-fallback)' if policy.stream else 'off'}")
     echo(f" Prompt cache: {'on (auto-fallback)' if policy.prompt_cache else 'off'}")
-    if getattr(policy, "analysis_mode", "batch") == "stream":
+    if _effective_analysis_mode(policy) == "stream":
         echo(f" Analysis   : stream (group={policy.analysis_group_files} files/request, "
              f"reset@{int(policy.analysis_reset_ratio * 100)}%, "
              f"≤{policy.max_concurrent_llm} concurrent LLM, "
@@ -1131,7 +1144,8 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                      client_factory: Optional[Callable] = None, echo=print,
                      source_override=None, reachable_check: Optional[Callable] = None,
                      concurrency: int = 0, emit=None,
-                     resume_dir: Optional[str] = None) -> dict:
+                     resume_dir: Optional[str] = None,
+                     focus: str = "") -> dict:
     """Sweep a domain. Hosts are SEQUENTIAL (one at a time — LLM analysis is
     the bottleneck, not host discovery). Within each share, files are read
     in PARALLEL via ThreadPoolExecutor (SMB I/O parallelism). The
@@ -1272,7 +1286,7 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
         _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                                domain_source, computers, client_factory, echo,
                                read_threads=concurrency, emit=emit,
-                               state_store=state_store)
+                               state_store=state_store, focus=focus)
         _update_manifest_host(manifest, entry, started,
                               total_bytes=sum(r["bytes_read"] for r in results),
                               total_calls=sum(r["tool_calls"] for r in results))

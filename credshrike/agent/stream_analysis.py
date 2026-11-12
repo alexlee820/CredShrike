@@ -265,6 +265,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
                             budget_lock: Optional[threading.Lock] = None,
                             memory_block: str = "",
                             use_triage: Optional[bool] = None,
+                            focus: str = "",
                             resume: Optional[dict] = None,
                             state_sink: Optional[Callable] = None) -> dict:
     """Same result contract as _analyze_share_batches:
@@ -463,6 +464,8 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
                       if ledger.findings or total_seen > k else "")
             prompt = _BATCH_PROMPT.format(
                 n=len(entries), share=share_name, host=host, digest=digest) \
+                + (f"OPERATOR FOCUS — the scope is fixed, but pay special "
+                   f"attention to: {focus}\n\n" if focus else "") \
                 + "\n".join(chunk)
             say("ai", f"[ai] {share_name}: request ({len(entries)} files, "
                       f"{len(prompt) // 1000}K chars)")

@@ -273,6 +273,11 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
     if getattr(args, "resume", None) and preset != DOMAIN_PRESET:
         raise SystemExit("error: --resume applies to domain-sweep runs only")
 
+    # for the canned sweeps the goal is NOT the task (the sweep is
+    # deterministic) — it becomes the operator FOCUS injected into every
+    # share-analysis prompt
+    focus = (getattr(args, "goal", "") or "").strip()
+
     if preset == DOMAIN_PRESET:
         import os
         if getattr(args, "resume", None):
@@ -289,13 +294,14 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
                          computers_filter=args.computers_filter or "",
                          max_hosts=args.max_hosts or None,
                          concurrency=concurrency,
-                         resume_dir=args.resume)
+                         resume_dir=args.resume, focus=focus)
         return
 
     # full (single host): code-side parallel dump + config banner, same as
     # full-domain but for just the specified host(s)
     if preset == HOST_PRESET:
         from .orchestrator import _dump_single_share, _analyze_share_batches
+        _HOST_FOCUS = focus
         from .session import AgentSession
         from ..report import write_report
         from pathlib import Path
@@ -325,7 +331,8 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
                 for si, share_info in enumerate(dumpable, 1):
                     share_name = share_info["name"]
 
-                    if policy.analysis_mode == "stream":
+                    from .orchestrator import _effective_analysis_mode
+                    if _effective_analysis_mode(policy) == "stream":
                         # stream mode walks + reads + analyzes on its own
                         from .stream_analysis import analyze_share_streaming
                         print(f"[share] {host}/{share_name}: streaming analysis...")
@@ -335,7 +342,7 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
                             client_factory=lambda: _make_client(policy),
                             echo=lambda l: print(l),
                             memory_block=f"({si}/{len(dumpable)}) ",
-                            memory=memory)
+                            memory=memory, focus=_HOST_FOCUS)
                         memory = result["memory"]
                         all_reports.append(f"### {share_name}\n{result['report']}")
                         all_findings.extend(result["findings"])
@@ -357,7 +364,8 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
                         credential, policy, audit, host, share_name,
                         file_entries, lambda: _make_client(policy),
                         lambda l: print(l), dc=args.dc or "",
-                        domain_source=args.source, memory=memory)
+                        domain_source=args.source, memory=memory,
+                        focus=_HOST_FOCUS)
                     memory = result["memory"]
                     all_reports.append(f"### {share_name}\n{result['report']}")
                     all_findings.extend(result["findings"])

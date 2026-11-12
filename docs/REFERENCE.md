@@ -200,10 +200,10 @@ chooses its own strategy and tools.
 
 ## Analysis Modes & Triage
 
-Applies to `host` / `domain` (not regex-sweep, which is always triage +
+Applies to `host` / `domain`. **stream + Snaffler triage is the default**(analysis_mode=stream, analysis_triage=true; triage implies stream — the rules only exist in the stream walkers). batch is opt-in via `--analysis-mode batch` + `--no-analysis-triage`. Not regex-sweep, which is always triage +
 regex + LLM-judgment by design).
 
-### batch (default)
+### batch (opt-in)
 
 Each share is dumped code-side into pages (~24K chars), the model pages
 through with `smb_dump_share` / deep reads, one conversation per host.

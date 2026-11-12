@@ -127,9 +127,12 @@ def test_domain_sweep_merges_and_skips(tmp_path, fake_smb):
         "ws01.corp.local": findings_ws01,
         "ws03.corp.local": findings_ws03,     # ws02 unreachable -> never swept
     })
+    policy = Policy()
+    policy.analysis_mode = "batch"     # this test exercises the batch path
+    policy.analysis_triage = False
     lines = []
     result = run_domain_sweep(
-        credential=_credential(), policy=Policy(), audit_dir=str(tmp_path),
+        credential=_credential(), policy=policy, audit_dir=str(tmp_path),
         client_factory=factory, echo=lines.append,
         source_override=_computers,
         reachable_check=lambda host: host != "ws02.corp.local")
@@ -220,9 +223,12 @@ def test_dump_stats_surface_in_report(tmp_path, fake_smb):
 def test_parallel_file_reads_and_sequential_hosts(tmp_path, fake_smb):
     """concurrency>1 = parallel file reads within a share; hosts remain
     sequential. Verify the log mentions parallel reads and hosts complete in order."""
+    policy = Policy()
+    policy.analysis_mode = "batch"     # this test exercises the batch path
+    policy.analysis_triage = False
     lines = []
     result = run_domain_sweep(
-        credential=_credential(), policy=Policy(), audit_dir=str(tmp_path),
+        credential=_credential(), policy=policy, audit_dir=str(tmp_path),
         client_factory=_client_factory_for_hosts({"ws01.corp.local": []}),
         echo=lines.append,
         source_override=_computers,
@@ -250,6 +256,8 @@ def test_dump_auto_splits_into_batches(tmp_path, fake_smb):
     fake_smb.file_contents = {f"big{i}.txt": big.encode() for i in range(6)}
 
     policy = Policy()
+    policy.analysis_mode = "batch"     # this test exercises the batch path
+    policy.analysis_triage = False
     policy.context_token_limit = 2800             # budget = 2800*3*0.6 = 5040
     # → 2 files per batch (~4058 chars), 6 files → exactly 3 batches
     lines = []
@@ -292,3 +300,36 @@ def test_domain_sweep_default_threads_come_from_policy(tmp_path, fake_smb):
         source_override=lambda: [ComputerRecord(cn="WS01", dns_name="ws01.corp.local")],
         reachable_check=lambda host: True)
     assert any("PARALLEL FILE READS: 10" in line for line in lines)
+
+
+def test_focus_injected_into_batch_and_defaults_flipped(tmp_path, fake_smb):
+    """The operator goal doubles as FOCUS for canned sweeps, and the default
+    experience is now stream + Snaffler triage."""
+    from credshrike.agent.orchestrator import (_effective_analysis_mode,
+                                                run_domain_sweep)
+
+    # defaults: stream + triage, and triage implies stream even if a policy
+    # file asks for batch
+    p = Policy()
+    assert p.analysis_mode == "stream" and p.analysis_triage is True
+    assert _effective_analysis_mode(p) == "stream"
+    b = Policy(); b.analysis_mode = "batch"; b.analysis_triage = False
+    assert _effective_analysis_mode(b) == "batch"
+    b2 = Policy(); b2.analysis_mode = "batch"   # triage still on → stream
+    assert _effective_analysis_mode(b2) == "stream"
+
+    # batch sweep with focus → the analysis goal carries the OPERATOR FOCUS
+    policy = Policy()
+    policy.analysis_mode = "batch"
+    policy.analysis_triage = False
+    factory = _client_factory_for_hosts({"ws01.corp.local": []})
+    run_domain_sweep(credential=_credential(), policy=policy,
+                     audit_dir=str(tmp_path), client_factory=factory,
+                     echo=lambda l: None,
+                     source_override=lambda: [ComputerRecord(cn="WS01",
+                                                             dns_name="ws01.corp.local")],
+                     reachable_check=lambda host: True,
+                     focus="only password-type credentials")
+    goals_text = str(factory.state["goals"])
+    assert "OPERATOR FOCUS" in goals_text
+    assert "only password-type credentials" in goals_text

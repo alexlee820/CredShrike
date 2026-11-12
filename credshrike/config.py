@@ -21,7 +21,8 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # Pipeline: walkers list dirs → path queue → ONE LLM thread per share
     # reads files itself and sends micro-batches. Coverage enforced by a
     # code-side ledger (Part 1 of the report is generated from it).
-    "analysis_mode": "batch",           # batch | stream
+    "analysis_mode": "stream",          # stream | batch (stream is the default
+                                       # experience: pipelined shares + ledger)
     "analysis_group_files": 10,         # K files per request
     "analysis_group_wait_ms": 2000,     # wait this long to fill a group
     "analysis_reset_ratio": 0.7,        # session reset at 70% of the context budget
@@ -31,7 +32,9 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # (stream analysis): junk discarded, artifacts (.kdbx/NTDS.DIT/.ssh/...)
     # reported WITHOUT reading, relay files streamed to the LLM. Detection
     # stays 100% LLM — no detection regexes in this path.
-    "analysis_triage": False,
+    "analysis_triage": True,            # Snaffler read/no-read rules (implies
+                                       # stream): junk discarded, artifacts
+                                       # reported unread, relay files analyzed
     "result_char_cap": 8192,            # per tool_result fed to the LLM
     "max_tool_calls": 100,              # per run
     "max_total_read_bytes": 10 * 1024 * 1024,

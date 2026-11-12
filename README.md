@@ -132,13 +132,19 @@ No `--preset` needed — bare invocation defaults to `domain`. The tool
 will enumerate all computers, dump every share, and produce a combined
 report with cross-host credential merging.
 
+`--goal` is NOT required for `domain`/`host` (the sweep itself is
+deterministic). If you pass one, it becomes an operator **focus** — extra
+instructions injected into every share-analysis prompt ("only
+password-type credentials", "flag anything HR related") — while the scope
+stays fixed. Only the `custom` preset treats the goal as the task itself.
+
 ### Single Host, Full Content Review
 
 ```bash
 credshrike agent --host FILE01.hackaday.lab ... --preset host
 ```
 
-### Streaming Analysis (optional, faster wall clock)
+### Streaming Analysis (default)
 
 `--analysis-mode stream` pipelines each share (add `--analysis-triage` to
 let Snaffler's 4-layer read/no-read rules decide which files reach the LLM:
@@ -151,7 +157,7 @@ from it, so coverage is enforced without a second LLM pass. Sessions reset
 near the context limit (ledger carried over), shares run up to
 `max_shares_in_flight` in parallel under a global `max_concurrent_llm`
 semaphore, and the web UI monitor gets separate Walking/AI-thread tabs with
-share filter chips. `batch` remains the default.
+share filter chips. Stream + Snaffler triage is the default; `--analysis-mode batch` restores the dump-then-analyze flow.
 
 ```bash
 credshrike agent --preset domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 4

@@ -58,6 +58,14 @@ def test_ledger_checklist_covers_every_file():
 # --------------------------------------------------------------------------- #
 # end-to-end share pipeline against fakes
 # --------------------------------------------------------------------------- #
+class _NoNetSession:
+    """Fail-fast SMBSession stand-in that is still SUBCLASSABLE —
+    inventory_cache defines CachedSMBSession(SMBSession) at import time, so a
+    lambda patch explodes when runstate lazily imports it mid-test."""
+    def __init__(self, *a, **k):
+        raise RuntimeError("no network in tests")
+
+
 class _FakeSMB:
     def __init__(self, files):
         self.files = files
@@ -139,12 +147,10 @@ def session(tmp_path, monkeypatch):
                      "more.txt": "still nothing\n"})
     s.smb = lambda host: fake
 
-    def _fail_connect(*args, **kwargs):
-        raise RuntimeError("no network in tests")
 
     # DNS for a nonexistent host can hang getaddrinfo for minutes — make any
     # real SMBSession construction fail fast so the code falls back to fakes
-    monkeypatch.setattr(smb_mod, "SMBSession", _fail_connect)
+    monkeypatch.setattr(smb_mod, "SMBSession", _NoNetSession)
     pool = Queue()
     pool.put(fake)
     s.get_read_pool = lambda host: pool
@@ -233,7 +239,10 @@ def test_domain_sweep_stream_mode_writes_report(tmp_path, monkeypatch):
     monkeypatch.setattr(session_mod.AgentSession, "smb",
                         lambda self, host: FakeSMB())
     monkeypatch.setattr(smb_mod, "SMBSession",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no net")))
+                        _NoNetSession)
+    def _fail_factory(*a, **k):
+        raise ConnectionError("no cache-armed sessions in tests")
+    monkeypatch.setattr(smb_mod, "create_smb_session", _fail_factory)
 
     policy = Policy()
     policy.analysis_mode = "stream"
@@ -289,7 +298,10 @@ def test_stream_triage_decides_what_the_llm_reads(tmp_path, monkeypatch):
                      "random.dat": b"x"})                   # triage None
     s.smb = lambda host: fake
     monkeypatch.setattr(smb_mod, "SMBSession",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no net")))
+                        _NoNetSession)
+    def _fail_factory(*a, **k):
+        raise ConnectionError("no cache-armed sessions in tests")
+    monkeypatch.setattr(smb_mod, "create_smb_session", _fail_factory)
     pool = Queue()
     pool.put(fake)
     s.get_read_pool = lambda host: pool
@@ -342,7 +354,10 @@ def test_stream_triage_known_fps_surfaced(tmp_path, monkeypatch):
                      "deploy.ps1": "DB_PASSWORD=X\n"})  # relay
     s.smb = lambda host: fake
     monkeypatch.setattr(smb_mod, "SMBSession",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no net")))
+                        _NoNetSession)
+    def _fail_factory(*a, **k):
+        raise ConnectionError("no cache-armed sessions in tests")
+    monkeypatch.setattr(smb_mod, "create_smb_session", _fail_factory)
     q = Queue(); q.put(fake)
     s.get_read_pool = lambda host: q
     client, _ = _fake_client({})
@@ -356,3 +371,16 @@ def test_stream_triage_known_fps_surfaced(tmp_path, monkeypatch):
                                     "reason": "known false positive: sceregvl.inf"}]
     assert "UNRESOLVED" not in result["report"]
     s.close_smb()
+
+
+def test_focus_injected_into_stream_batch_prompts(session):
+    """The operator focus reaches every stream micro-batch prompt."""
+    client, state = _fake_client({"creds.txt": "", "notes.txt": ""})
+    result = analyze_share_streaming(
+        credential=session.credential, policy=session.policy,
+        audit=session.audit, session=session, host="fs01", share_name="IT",
+        client_factory=lambda: client, echo=lambda l: None,
+        focus="flag anything HR related")
+    assert "OPERATOR FOCUS" in state["seen"]
+    assert "flag anything HR related" in state["seen"]
+    assert result["stats"]["files_dumped"] == 3   # focus changes nothing else

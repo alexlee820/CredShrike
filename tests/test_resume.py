@@ -38,6 +38,10 @@ def fake_smb(monkeypatch):
 
 def _sweep(tmp_path, factory, policy=None, resume_dir=None, echo=None,
            hosts=None):
+    if policy is None:                 # these tests exercise the batch path
+        policy = Policy()
+        policy.analysis_mode = "batch"
+        policy.analysis_triage = False
     return run_domain_sweep(
         credential=_credential(), policy=policy or Policy(),
         audit_dir=str(tmp_path), client_factory=factory,

@@ -134,7 +134,7 @@
           <option value="auto">auto (LDAP fallback)</option>
         </select>
       </div>
-      <div class="field full" id="goalWrap"><label>Goal</label>
+      <div class="field full" id="goalWrap"><label id="goalLabel">Goal</label>
         <textarea id="goal" placeholder="audit the IT share for credentials and weak ACLs"></textarea>
       </div>
       <div class="field"><label>Host(s) — comma sep · empty = all</label>
@@ -351,11 +351,18 @@ $('authType').onchange = () => {
   $('f_' + t).classList.remove('hidden');
 };
 function syncGoalVisibility() {
-  $('goalWrap').style.display =
-    ['regex-sweep','domain','host'].includes($('preset').value) ? 'none' : '';
+  const preset = $('preset').value;
+  const custom = preset === 'custom';
+  // regex-sweep drives its own canned goal; domain/host take the field as
+  // an OPTIONAL focus injected into every share-analysis prompt
+  $('goalWrap').style.display = preset === 'regex-sweep' ? 'none' : '';
+  $('goalLabel').textContent = custom ? 'Goal' : 'Focus (optional — extra instructions for the analysis)';
+  $('goal').placeholder = custom
+    ? 'audit the IT share for credentials and weak ACLs'
+    : 'e.g. only password-type credentials; flag anything HR related';
 }
 $('preset').onchange = syncGoalVisibility;
-syncGoalVisibility();   // page load: default preset (domain) hides Goal too
+syncGoalVisibility();   // page load: default preset (domain) shows the Focus field
 
 async function loadResumeRuns() {
   try {

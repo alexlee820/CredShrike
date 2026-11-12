@@ -155,6 +155,7 @@ def _execute_run(state: RunState) -> None:
             summary = run_domain_sweep(
                 credential=credential, policy=policy,
                 audit_dir=os.path.dirname(os.path.abspath(resume_dir)) or "runs",
+                focus=params.get("goal") or "",
                 client_factory=lambda: (_client_factory() if _client_factory
                                         else _build_client(params)),
                 echo=state.push, emit=state.push_event,
@@ -186,6 +187,7 @@ def _execute_run(state: RunState) -> None:
                 audit_dir=params.get("audit_dir") or "runs",
                 dc=params.get("dc") or "",
                 domain_source=params.get("domain_source") or "auto",
+                focus=params.get("goal") or "",
                 client_factory=lambda: (_client_factory() if _client_factory
                                         else _build_client(params)),
                 echo=state.push,
@@ -209,6 +211,7 @@ def _execute_run(state: RunState) -> None:
                 audit_dir=params.get("audit_dir") or "runs",
                 dc=params.get("dc") or "",
                 domain_source=params.get("domain_source") or "auto",
+                focus=params.get("goal") or "",
                 computers_filter=params.get("computers_filter") or "",
                 max_hosts=int(params["max_hosts"]) if params.get("max_hosts") else None,
                 concurrency=int(params.get("concurrency") or policy.read_threads),
