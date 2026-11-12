@@ -240,10 +240,10 @@ def _execute_run(state: RunState) -> None:
         state.loop = loop
 
         goal = params.get("goal") or ""
-        preset = params.get("preset") or ""
+        preset = effective_preset or ""
         if preset in ("snaffler", "regex-sweep") and not goal:
             goal = SNAFFLER_PRESET
-        elif preset == "full" and not goal:
+        elif preset == HOST_PRESET and not goal:
             goal = FULL_PRESET
         if not goal:
             raise ValueError("no goal or preset given")

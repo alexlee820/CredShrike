@@ -352,10 +352,10 @@ $('authType').onchange = () => {
 };
 function syncGoalVisibility() {
   $('goalWrap').style.display =
-    ['regex-sweep','full','full-domain'].includes($('preset').value) ? 'none' : '';
+    ['regex-sweep','domain','host'].includes($('preset').value) ? 'none' : '';
 }
 $('preset').onchange = syncGoalVisibility;
-syncGoalVisibility();   // page load: default preset (full-domain) hides Goal too
+syncGoalVisibility();   // page load: default preset (domain) hides Goal too
 
 async function loadResumeRuns() {
   try {
