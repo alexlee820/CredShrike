@@ -80,7 +80,9 @@ def build_credential(args) -> Credential:
 
 
 def open_session(args, host: str) -> SMBSession:
-    return SMBSession(build_credential(args), host, timeout=args.timeout).connect()
+    from .smb_session import create_smb_session
+    return create_smb_session(build_credential(args), host,
+                              timeout=args.timeout).connect()
 
 
 def emit(obj, file=None) -> None:

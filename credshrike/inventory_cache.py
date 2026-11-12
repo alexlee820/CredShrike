@@ -147,11 +147,15 @@ class InventoryCache:
                 self._key_locks[key] = lock
             return lock
 
-    def _fetch_once(self, key: tuple, fetch):
-        """Run ``fetch`` at most once for ``key`` across threads (double-checked
-        locking; the fetch itself runs without any cache lock held)."""
+    def _fetch_once(self, key: tuple, recheck, fetch):
+        """Run ``fetch`` at most once for ``key`` across threads. Proper
+        double-checked locking: after acquiring the key lock, re-consult the
+        cache — a sibling thread may have populated it while we waited."""
         lock = self._key_lock(key)
         with lock:
+            again = recheck()
+            if again is not None:
+                return again
             return fetch()
 
     def _count(self, hit: bool, served: int = 0, written: int = 0) -> None:
@@ -172,14 +176,17 @@ class InventoryCache:
 
     # -- shares ------------------------------------------------------------- #
     def get_shares(self, host: str) -> Optional[list]:
+        out = self._lookup_shares(host)
+        self._count(out is not None)
+        return out
+
+    def _lookup_shares(self, host: str) -> Optional[list]:
         with self._lock:
             row = self._db.execute(
                 "SELECT shares_json, fetched_at FROM shares WHERE host = ?",
                 (host,)).fetchone()
         if row and self._fresh(row[1]):
-            self._count(True)
             return json.loads(row[0])
-        self._count(False)
         return None
 
     def put_shares(self, host: str, shares: list) -> None:
@@ -194,15 +201,19 @@ class InventoryCache:
     # -- dir listings -------------------------------------------------------- #
     def get_listing(self, host: str, share: str, path: str,
                     max_entries: int) -> Optional[dict]:
+        out = self._lookup_listing(host, share, path, max_entries)
+        self._count(out is not None)
+        return out
+
+    def _lookup_listing(self, host: str, share: str, path: str,
+                        max_entries: int) -> Optional[dict]:
         key = (host, norm_share(share), norm_path(path))
         hit = self._get_listing_row(key, max_entries)
         if hit is not None:
-            self._count(True)
             listing = json.loads(hit)
             # echo the caller's spelling, not the first caller's
             listing = dict(listing, share=share, path=path or "")
             return listing
-        self._count(False)
         return None
 
     def _get_listing_row(self, key: tuple, max_entries: int) -> Optional[str]:
@@ -256,6 +267,12 @@ class InventoryCache:
     # -- file reads (range-cover) --------------------------------------------- #
     def get_read(self, host: str, share: str, path: str, offset: int,
                  max_bytes: int) -> Optional[dict]:
+        out = self._lookup_read(host, share, path, offset, max_bytes)
+        self._count(out is not None, served=0 if out is None else out["size"])
+        return out
+
+    def _lookup_read(self, host: str, share: str, path: str, offset: int,
+                     max_bytes: int) -> Optional[dict]:
         """Serve ``[offset, offset+max_bytes)`` from a cached row that covers it.
 
         Cover rules: the row must start at or before ``offset``; a truncated
@@ -276,7 +293,6 @@ class InventoryCache:
                 "WHERE host=? AND share=? AND path=? ORDER BY offset DESC",
                 key).fetchall()
         if not rows:
-            self._count(False)
             return None
         if meta is not None:
             # rows were stored with metadata: valid only while unchanged
@@ -295,11 +311,9 @@ class InventoryCache:
                             key)
                         self._db.commit()
                         self._stale_evictions += 1
-                    self._count(False)
                     return None
         elif not self._fresh(rows[0][6]):
             # no listing metadata available → plain TTL freshness
-            self._count(False)
             return None
         for row_offset, length, trunc, _fs, _mt, b64, _fa in rows:
             if row_offset > offset:
@@ -315,12 +329,10 @@ class InventoryCache:
             slice_b = data[lo:lo + max_bytes] if lo < len(data) else b""
             if not slice_b:
                 continue
-            self._count(True, served=len(slice_b))
             return {"share": share, "path": path, "offset": offset,
                     "size": len(slice_b),
                     "truncated": len(slice_b) == max_bytes,
                     "content_b64": base64.b64encode(slice_b).decode("ascii")}
-        self._count(False)
         return None
 
     def put_read(self, host: str, share: str, path: str, result: dict) -> None:
@@ -392,7 +404,9 @@ class CachedSMBSession(SMBSession):
             self._cache.put_shares(self.host, out)
             return out
 
-        return self._cache._fetch_once(("shares", self.host), _fetch)
+        return self._cache._fetch_once(("shares", self.host),
+                                       lambda: self._cache._lookup_shares(self.host),
+                                       _fetch)
 
     def list_dir(self, share: str, path: str = "",
                  max_entries: int = DEFAULT_MAX_ENTRIES):
@@ -406,7 +420,9 @@ class CachedSMBSession(SMBSession):
             return out
 
         return self._cache._fetch_once(
-            ("dir", self.host, norm_share(share), norm_path(path)), _fetch)
+            ("dir", self.host, norm_share(share), norm_path(path)),
+            lambda: self._cache._lookup_listing(self.host, share, path, max_entries),
+            _fetch)
 
     def read_file(self, share: str, path: str, offset: int = 0,
                   max_bytes: int = DEFAULT_MAX_READ_BYTES):
@@ -422,4 +438,6 @@ class CachedSMBSession(SMBSession):
 
         return self._cache._fetch_once(
             ("read", self.host, norm_share(share), norm_path(path), offset,
-             max_bytes), _fetch)
+             max_bytes),
+            lambda: self._cache._lookup_read(self.host, share, path, offset, max_bytes),
+            _fetch)

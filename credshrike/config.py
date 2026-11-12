@@ -134,6 +134,13 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # socks5:// (local DNS) / socks5h:// (DNS at the proxy) / socks4:// /
     # http://[CONNECT], optional user:pass@. Empty = direct connection.
     "socks_proxy": "",
+    # Shared inventory cache (runs/.cache/inventory.db): domain computers,
+    # share lists, directory listings and file reads survive across runs —
+    # re-sweeps only fetch what changed, and interrupted runs resume without
+    # re-enumerating. CLI: --no-cache / --cache-ttl-hours / --no-content-cache
+    "inventory_cache": True,
+    "cache_ttl_hours": 24,      # freshness window for metadata + metadataless reads
+    "cache_content": True,      # False = cache listings but never file contents
     # --- context-window management ------------------------------------------
     "context_token_limit": 0,       # 0 = auto-manage off (set your model's
                                     # window, e.g. 128000 for GLM, 1000000 for
@@ -212,6 +219,9 @@ class Policy:
     stream: bool = DEFAULT_POLICY_DICT["stream"]
     prompt_cache: bool = DEFAULT_POLICY_DICT["prompt_cache"]
     socks_proxy: str = DEFAULT_POLICY_DICT["socks_proxy"]
+    inventory_cache: bool = DEFAULT_POLICY_DICT["inventory_cache"]
+    cache_ttl_hours: float = DEFAULT_POLICY_DICT["cache_ttl_hours"]
+    cache_content: bool = DEFAULT_POLICY_DICT["cache_content"]
     context_token_limit: int = DEFAULT_POLICY_DICT["context_token_limit"]
     compact_at_ratio: float = DEFAULT_POLICY_DICT["compact_at_ratio"]
     compact_keep_recent: int = DEFAULT_POLICY_DICT["compact_keep_recent"]

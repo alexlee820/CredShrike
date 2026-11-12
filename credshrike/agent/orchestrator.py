@@ -298,14 +298,14 @@ def _dump_single_share(session, host: str, share_name: str,
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import base64 as _b64
     from queue import Queue
-    from ..smb_session import SMBSession
+    from ..smb_session import create_smb_session
 
     # Create connection pool FIRST — shared by walk + read phases
     n_threads = max(1, read_threads)
     smb_pool: Queue = Queue()
     for i in range(n_threads):
         try:
-            reader = SMBSession(session.credential, host, timeout=30)
+            reader = create_smb_session(session.credential, host, timeout=30)
             reader.connect()
             smb_pool.put(reader)
         except Exception:  # noqa: BLE001 — pool creation failed (mock/no network)
@@ -687,16 +687,28 @@ def _port_open(host: str, port: int = 445, timeout: float = 3.0) -> bool:
 
 def _resolve_computers(credential: Credential, dc: str, domain_source: str,
                        computers_filter: str, source_override=None) -> list:
-    """Domain computer list, code-side (deterministic — no LLM involved)."""
+    """Domain computer list, code-side (deterministic — no LLM involved).
+    Consults the armed inventory cache first when one is active."""
     if source_override is not None:
         return source_override()
+    from ..smb_session import active_inventory_cache
+    cache = active_inventory_cache()
+    if cache is not None:
+        cached = cache.get_computers(dc, domain_source, computers_filter or "")
+        if cached is not None:
+            from ..domain.base import ComputerRecord
+            return [ComputerRecord(**d) for d in cached]
     if domain_source == "adws":
         from ..domain.adws_source import AdwsSource
         source = AdwsSource(credential, dc)
     else:
         from ..domain.ldap_source import LdapSource
         source = LdapSource(credential, dc)
-    return source.list_computers(computers_filter or "")
+    computers = source.list_computers(computers_filter or "")
+    if cache is not None:
+        cache.put_computers(dc, domain_source, computers_filter or "",
+                            [c.to_dict() for c in computers])
+    return computers
 
 
 def merge_findings(all_findings: list[dict]) -> dict:
@@ -1013,6 +1025,12 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     echo(f" Model      : {policy.model} @ {policy.api_base_url or 'api.anthropic.com'}")
     if getattr(policy, "socks_proxy", ""):
         echo(f" SOCKS      : {policy.socks_proxy} (SMB/LDAP/ADWS only — LLM direct)")
+    if getattr(policy, "inventory_cache", True):
+        echo(f" Cache      : <audit_dir>/.cache/inventory.db "
+             f"(ttl {getattr(policy, 'cache_ttl_hours', 24)}h, "
+             f"content {'on' if getattr(policy, 'cache_content', True) else 'off'})")
+    else:
+        echo(" Cache      : off (--no-cache)")
     echo(f" Concurrency: {concurrency} thread(s) (parallel file reads)")
     echo(f" Skip exts  : {len(policy.dump_skip_exts)} types" +
          (f" ({', '.join(policy.dump_skip_exts[:5])}...)" if policy.dump_skip_exts else " (none)"))

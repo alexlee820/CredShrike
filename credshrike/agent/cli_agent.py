@@ -79,6 +79,12 @@ def _load_policy(args) -> Policy:
         policy.mask_netbios_domain = args.mask_netbios_domain
     if getattr(args, "socks_proxy", None):
         policy.socks_proxy = args.socks_proxy
+    if getattr(args, "no_cache", False):
+        policy.inventory_cache = False
+    if getattr(args, "cache_ttl_hours", None) is not None:
+        policy.cache_ttl_hours = float(args.cache_ttl_hours)
+    if getattr(args, "no_content_cache", False):
+        policy.cache_content = False
     if getattr(args, "skip_exts", None) is not None:
         raw = args.skip_exts.strip().lower()
         if raw == "none" or raw == "":
@@ -211,6 +217,25 @@ def cmd_agent(args) -> None:
     if policy.socks_proxy:
         from ..socks_proxy import apply_socks_proxy
         apply_socks_proxy(policy.socks_proxy)
+
+    # shared inventory cache, armed for the whole agent run (every preset
+    # enumerates through SMBSession, so all of them benefit)
+    from ..inventory_cache import InventoryCache
+    from ..smb_session import arm_inventory_cache, disarm_inventory_cache
+    _inv_cache = InventoryCache.open(args.audit_dir or "runs", policy)
+    if getattr(args, "refresh", False) and _inv_cache is not None:
+        _inv_cache.wipe()
+    if _inv_cache is not None:
+        arm_inventory_cache(_inv_cache)
+    try:
+        _cmd_agent_dispatch(args, credential, policy, concurrency, preset)
+    finally:
+        if _inv_cache is not None:
+            disarm_inventory_cache()
+            _inv_cache.close()
+
+
+def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
 
     # config banner for EVERY preset (full-domain, full, snaffler, custom)
     from .orchestrator import _print_config_banner
@@ -507,6 +532,14 @@ def register(subparsers) -> None:
                         "(micro-batches of K files, shared session, code-side "
                         "ledger guarantees coverage); batch = dump-then-analyze "
                         "(default). CLI/policy; web UI has a dropdown")
+    p.add_argument("--no-cache", action="store_true",
+                   help="disable the shared inventory cache (runs/.cache/inventory.db)")
+    p.add_argument("--refresh", action="store_true",
+                   help="wipe the inventory cache before this run")
+    p.add_argument("--cache-ttl-hours", type=float, default=None, metavar="H",
+                   help="inventory cache freshness window (default 24)")
+    p.add_argument("--no-content-cache", action="store_true",
+                   help="cache listings but never file contents")
     p.add_argument("--max-concurrent-llm", type=int, default=None,
                    help="global in-flight LLM requests across shares "
                         "(stream mode; default 2)")

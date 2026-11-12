@@ -429,26 +429,31 @@ def _b64(data: bytes) -> str:
 # a plain SMBSession. Consumers import create_smb_session FUNCTION-LOCALLY
 # and the plain path references the module-global SMBSession name, so the
 # established test trick — monkeypatch.setattr(smb_mod, "SMBSession", fake) —
-# keeps intercepting construction.
-_ACTIVE_CACHE = None
+# keeps intercepting construction. Arming is a STACK so nested scopes
+# (cmd_agent arming, then run_domain_sweep arming) unwind cleanly.
+_ACTIVE_CACHE = []
 
 
 def arm_inventory_cache(cache) -> None:
     """Make create_smb_session return cache-first sessions (run-scoped)."""
-    global _ACTIVE_CACHE
-    _ACTIVE_CACHE = cache
+    _ACTIVE_CACHE.append(cache)
 
 
 def disarm_inventory_cache() -> None:
-    global _ACTIVE_CACHE
-    _ACTIVE_CACHE = None
+    if _ACTIVE_CACHE:
+        _ACTIVE_CACHE.pop()
+
+
+def active_inventory_cache():
+    return _ACTIVE_CACHE[-1] if _ACTIVE_CACHE else None
 
 
 def create_smb_session(credential, host, port: int = 445, timeout: int = 30,
                        resolver=None) -> "SMBSession":
-    if _ACTIVE_CACHE is not None:
+    cache = active_inventory_cache()
+    if cache is not None:
         from .inventory_cache import CachedSMBSession   # lazy: no import cycle
-        return CachedSMBSession(credential, host, cache=_ACTIVE_CACHE,
+        return CachedSMBSession(credential, host, cache=cache,
                                 port=port, timeout=timeout, resolver=resolver)
     return SMBSession(credential, host, port=port, timeout=timeout,
                       resolver=resolver)

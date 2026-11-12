@@ -118,8 +118,18 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
                       skipped_files: Optional[list] = None,
                       masking: Optional[dict] = None,
                       artifacts: Optional[list] = None,
-                      known_fps: Optional[list] = None) -> str:
+                      known_fps: Optional[list] = None,
+                      cache_stats: Optional[dict] = None) -> str:
     audit = _read_audit(audit_path)
+    if cache_stats:
+        _cs = cache_stats
+        cache_note = (f"inventory cache: {_cs.get('hits', 0)} hits / "
+                      f"{_cs.get('misses', 0)} misses"
+                      + (f", {_cs.get('stale_evictions', 0)} stale evicted"
+                         if _cs.get("stale_evictions") else "")
+                      + f" — {_cs.get('db_path', '')}")
+    else:
+        cache_note = ""
     reads = [e for e in audit if e.get("tool") == "smb_read_file"]
     listings = [e for e in audit if e.get("tool") == "smb_list_dir"]
     scans = [e for e in audit if e.get("tool") == "smb_scan_share"]
@@ -370,6 +380,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
 </nav>
 
 <div class="tab-panel active" id="overview">
+  <p class="dim" style="font-size:11px">{cache_note}</p>
   <div class="tiles">
     {tile('domain computers', len(domain_computers))}
     {tile('shares', total_shares)}

@@ -15,7 +15,7 @@ from typing import Optional
 
 from ..config import Policy
 from ..credentials import Credential
-from ..smb_session import SMBSession
+from ..smb_session import SMBSession, create_smb_session
 from .audit import AuditLog
 
 
@@ -129,7 +129,7 @@ class AgentSession:
     def smb(self, host: str) -> SMBSession:
         """Cached read-only SMB session per host."""
         if host not in self._smb_cache:
-            session = SMBSession(self.credential, host, timeout=30)
+            session = create_smb_session(self.credential, host, timeout=30)
             session.connect()
             self._smb_cache[host] = session
         return self._smb_cache[host]
@@ -141,7 +141,7 @@ class AgentSession:
             pool: Queue = Queue()
             for _ in range(max(1, self.read_threads)):
                 try:
-                    reader = SMBSession(self.credential, host, timeout=30)
+                    reader = create_smb_session(self.credential, host, timeout=30)
                     reader.connect()
                     pool.put(reader)
                 except Exception:  # noqa: BLE001 — mock env, fall back below

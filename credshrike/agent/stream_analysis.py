@@ -275,7 +275,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     regexes involved are PasteGuard masking. use_triage=False = full mode:
     every non-skip-ext file is streamed to the LLM."""
     from ..masking import Masker, restore_findings
-    from ..smb_session import SMBSession
+    from ..smb_session import create_smb_session
     from .orchestrator import (_OFFICE_EXTRACTABLE, _extract_office_text,
                                _generate_share_summary, _walk_share_files)
 
@@ -348,7 +348,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     # ---- phase 2: LLM worker (single consumer) -------------------------- #
     client = client_factory()
     try:
-        read_conn = SMBSession(credential, host, timeout=30)
+        read_conn = create_smb_session(credential, host, timeout=30)
         read_conn.connect()
         own_conn = True
     except Exception:  # noqa: BLE001 — mocks / no network: shared session

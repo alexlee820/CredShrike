@@ -89,6 +89,13 @@ def fake_smb(monkeypatch):
     import credshrike.agent.session as session_mod
     monkeypatch.setattr(session_mod.AgentSession, "smb",
                         lambda self, host: fake)
+    # _dump_single_share builds its pool via a function-local
+    # create_smb_session import — patch the module symbol so no test ever
+    # attempts a real SMB handshake against a resolvable lab host
+    import credshrike.smb_session as smb_mod
+    def _no_real_smb(*a, **k):
+        raise ConnectionError("no real SMB sessions in tests")
+    monkeypatch.setattr(smb_mod, "create_smb_session", _no_real_smb)
     return fake
 
 
