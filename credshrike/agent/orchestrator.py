@@ -1178,6 +1178,10 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                                               computers_filter, max_hosts, policy),
             computers=[c.to_dict() for c in computers])
     state_store = ShareStateStore(run_dir)
+    if not resumed:
+        echo(f"[domain] run dir: {run_dir}")
+        echo(f"[domain] interrupted? continue exactly here with "
+             f"--resume {run_dir}")
     hosts = [c.dns_name or c.cn for c in computers]
     if max_hosts:
         hosts = hosts[:max_hosts]

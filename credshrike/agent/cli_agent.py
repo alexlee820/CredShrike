@@ -196,6 +196,18 @@ def _make_client(policy=None):
     return Anthropic(**kwargs)  # falls back to ANTHROPIC_API_KEY / auth profile
 
 
+def _resolve_latest_resume(audit_dir: str) -> str:
+    """--resume latest: the newest resumable run dir (scan_run_dirs is
+    newest-first)."""
+    from ..runstate import scan_run_dirs
+    runs = [r for r in scan_run_dirs(audit_dir) if r["resumable"]]
+    if not runs:
+        raise SystemExit(
+            f"error: no resumable runs under {audit_dir}/ — `credshrike runs list` "
+            "shows what exists (a run stays resumable until every host is done)")
+    return runs[0]["run_dir"]
+
+
 def _resolve_preset(args) -> Optional[str]:
     """Effective preset: explicit wins; bare invocation (no preset, no goal,
     not REPL) defaults to full-domain — the per-computer fan-out sweep."""
@@ -249,9 +261,12 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
     if preset == "full-domain":
         import os
         if getattr(args, "resume", None):
+            if args.resume == "latest":
+                args.resume = _resolve_latest_resume(args.audit_dir or "runs")
             if not os.path.isfile(os.path.join(args.resume, "run.json")):
                 raise SystemExit(
-                    f"error: {args.resume} is not a resumable run (no run.json)")
+                    f"error: {args.resume} is not a resumable run (no run.json). "
+                    "Try `credshrike runs list` or --resume latest")
         from .orchestrator import run_domain_sweep
         run_domain_sweep(credential=credential, policy=policy,
                          audit_dir=args.audit_dir, dc=args.dc or "",

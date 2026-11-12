@@ -257,6 +257,10 @@ Permission/ACL probes are never cached. `--no-cache` disables,
 ```bash
 # the sweep died halfway — continue where it left off
 credshrike agent --preset full-domain ... --resume runs/domain_20261112T101010Z
+# or let CredShrike pick the newest interrupted run
+credshrike agent --preset full-domain ... --resume latest
+# not sure which? every run echoes its dir at startup, and:
+credshrike runs list
 ```
 
 - **Host level**: done hosts are skipped entirely; their persisted findings

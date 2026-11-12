@@ -276,3 +276,52 @@ def test_stream_state_sink_writes_in_progress_checkpoints(tmp_path, stream_env):
     assert sinks, "no checkpoint was written"
     assert all(s["status"] == "in-progress" for s in sinks)
     assert any("f0.txt" in s["ledger"]["verdicts"] for s in sinks)
+
+
+# --------------------------------------------------------------------------- #
+# discoverability: runs list, --resume latest, banner hint
+# --------------------------------------------------------------------------- #
+
+def _interrupted_run(tmp_path):
+    from credshrike.config import Policy
+    from credshrike.runstate import RunManifest, fingerprint_components
+    run = tmp_path / "domain_20261112T101010Z"
+    run.mkdir(parents=True)
+    mf = RunManifest.create(str(run), hosts=["ws01.corp.local", "ws02.corp.local"],
+                            components=fingerprint_components("", "auto", "", None,
+                                                              Policy()),
+                            computers=[])
+    mf.mark_host("ws01.corp.local", status="done", shares_done=["IT"])
+    mf.save()
+    return run
+
+
+def test_runs_list_prints_resumable_hint(tmp_path, capsys):
+    from credshrike.cli import cmd_runs_list
+    run = _interrupted_run(tmp_path)
+    ns = SimpleNamespace(audit_dir=str(tmp_path))
+    cmd_runs_list(ns)
+    out = capsys.readouterr().out
+    assert "domain_20261112T101010Z" in out
+    assert "1/2" in out and "resumable" in out
+    assert f"--resume {run}" in out and "--resume latest" in out
+
+
+def test_resume_latest_picks_newest_resumable(tmp_path):
+    from credshrike.agent.cli_agent import _resolve_latest_resume
+    run = _interrupted_run(tmp_path)
+    assert _resolve_latest_resume(str(tmp_path)) == str(run)
+
+    # everything complete -> nothing resumable
+    from credshrike.runstate import RunManifest
+    mf = RunManifest.load(str(run))
+    mf.mark_host("ws02.corp.local", status="done")
+    mf.mark_complete()
+    with pytest.raises(SystemExit, match="no resumable runs"):
+        _resolve_latest_resume(str(tmp_path))
+
+
+def test_fresh_sweep_echoes_resume_hint(tmp_path, fake_smb):
+    lines = []
+    _sweep(tmp_path, _client_factory_for_hosts({}), echo=lines.append)
+    assert any("--resume" in l and "domain_" in l for l in lines)

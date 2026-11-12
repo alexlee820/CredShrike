@@ -438,7 +438,7 @@ as a starting point.
 | `--mask-email-domain` | Surrogate email domain (default `corp.local`) |
 | `--mask-netbios-domain` | Surrogate NetBIOS domain (default `corp`) |
 | `--socks-proxy` | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos only — LLM direct (`socks5h://` = DNS at the proxy); shared across smb/domain/agent subcommands |
-| `--resume RUN_DIR` | full-domain only: continue an interrupted run (done hosts/shares skipped, stream file verdicts carried over, budget restored) |
+| `--resume RUN_DIR` | full-domain only: continue an interrupted run (done hosts/shares skipped, stream file verdicts carried over, budget restored). `--resume latest` picks the newest resumable run; `credshrike runs list` shows them all |
 | `--no-cache` / `--refresh` | disable the inventory cache / wipe it before the run |
 | `--cache-ttl-hours H` / `--no-content-cache` | tune the cache window / never cache file bytes |
 
@@ -506,6 +506,10 @@ While a run is live the page is a monitor: the event feed splits into
   already-verdicted files, and Part 1 of the report is generated from the
   ledger as always.
 - Web: `/api/runs/history` (disk scan) + the form's Resume run dropdown.
+- Discovery: every fresh sweep echoes its run dir + the exact `--resume`
+  command at startup; `credshrike runs list [--audit-dir runs]` tabulates
+  all runs with progress and the resumable flag; `--resume latest` resolves
+  to the newest resumable one.
 
 ---
 

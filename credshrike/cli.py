@@ -153,6 +153,32 @@ def cmd_smb_permissions(args) -> None:
 # --------------------------------------------------------------------------- #
 # standalone mask / restore (PasteGuard-style, no LLM or SMB involved)
 # --------------------------------------------------------------------------- #
+def cmd_runs_list(args) -> None:
+    """`credshrike runs list` — every run dir with a manifest, newest first,
+    with progress and a resumable flag (the CLI answer to 'which run dir do I
+    pass to --resume?')."""
+    from .runstate import scan_run_dirs
+
+    runs = scan_run_dirs(args.audit_dir)
+    if not runs:
+        print(f"no runs found under {args.audit_dir}/")
+        return
+    print(f"{'run directory':<44} {'updated':<20} {'hosts':>9}  {'shares':>6}  status")
+    print("-" * 96)
+    for r in runs:
+        name = r["run_dir"].replace(chr(92), "/").split("/")[-1]
+        flag = "  → resumable" if r["resumable"] else ""
+        print(f"{name:<44} {r['updated_at'] or '?':<20} "
+              f"{r['hosts_done']:>4}/{r['hosts_total']:<4} "
+              f"{r['shares_done']:>6}  {r['status']}{flag}")
+    resumable = [r for r in runs if r["resumable"]]
+    if resumable:
+        print()
+        print(f"resume: credshrike agent --preset full-domain ... "
+              f"--resume {resumable[0]['run_dir']}")
+        print("or:     credshrike agent --preset full-domain ... --resume latest")
+
+
 def cmd_mask(args) -> None:
     """Mask (or --restore) free text from a file/stdin.
 
@@ -293,6 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_smb_permissions)
 
     _register_mask(subs)
+
+    # --- runs (resume helpers) --- #
+    runs = subs.add_parser("runs", help="run history / resume helpers")
+    runs_subs = runs.add_subparsers(dest="runs_command", required=True)
+    p = runs_subs.add_parser("list", help="list runs with progress + resumable flag")
+    p.add_argument("--audit-dir", default="runs", help="runs directory (default runs)")
+    p.set_defaults(func=cmd_runs_list)
 
     # --- domain (Phase 2) / agent (Phase 3) parsers are registered by their
     # modules importing build_parser hooks; kept here so --help is stable. #
