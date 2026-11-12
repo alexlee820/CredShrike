@@ -27,3 +27,10 @@ lab.yaml
 *.swp
 Thumbs.db
 .DS_Store
+
+# inventory cache + per-run resume state (contain lab file paths + content —
+# runs/ is ignored above; these cover non-default --audit-dir locations)
+.cache/
+inventory.db*
+runs/**/run.json
+runs/**/state/
