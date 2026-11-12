@@ -264,7 +264,9 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
                             memory: str = "", sem: Optional[threading.Semaphore] = None,
                             budget_lock: Optional[threading.Lock] = None,
                             memory_block: str = "",
-                            use_triage: Optional[bool] = None) -> dict:
+                            use_triage: Optional[bool] = None,
+                            resume: Optional[dict] = None,
+                            state_sink: Optional[Callable] = None) -> dict:
     """Same result contract as _analyze_share_batches:
     {"report", "findings", "memory", "masked", "masked_entities", "stats",
      "artifacts" (use_triage only)}.
@@ -289,9 +291,30 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     per_file = policy.dump_per_file_bytes
     masker = Masker.from_policy(policy)
     ledger = ShareLedger(share_name)
+    if resume:
+        # continue an interrupted share: restore coverage state (NOT the
+        # token maps or findings — masker namespaces are per-context and
+        # persisted findings are merged by the orchestrator instead)
+        ledger.verdicts.update({k: dict(v)
+                                for k, v in (resume.get("verdicts") or {}).items()})
+        ledger.unreadable.update(resume.get("unreadable") or {})
+        ledger.budget_skipped.extend(resume.get("budget_skipped") or [])
 
     def say(channel, line):
         emit(channel, line, share_name)
+
+    def _checkpoint():
+        """Persist the in-progress ledger after each LLM batch so an
+        interrupted share resumes file-level (never kills analysis)."""
+        if state_sink is None:
+            return
+        try:
+            state_sink({"status": "in-progress",
+                        "ledger": {"verdicts": {k: dict(v) for k, v in ledger.verdicts.items()},
+                                   "unreadable": dict(ledger.unreadable),
+                                   "budget_skipped": list(ledger.budget_skipped)}})
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- phase 1: walkers (producers — paths only) ---------------------- #
     say("walk", f"[share] {host}/{share_name}: walking…")
@@ -305,6 +328,9 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     known_fps: list[dict] = []          # discarded by the known-FP name rules
 
     def _on_file(f):
+        prior = ledger.verdicts.get(_norm(f["path"]))
+        if prior and prior.get("verdict") not in (None, "UNRESOLVED"):
+            return          # analyzed before the interruption — keep its verdict
         if not use_triage:
             q.put(f)
             return
@@ -370,6 +396,11 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     opening = (f"Share: {share_name} on {host}. {memory_block}" +
                (_DIGEST_PROMPT + memory + "\n" if memory else "") +
                "Reply 'ready'.")
+    if ledger.verdicts:
+        # fresh LLM session, carried coverage: mirror the context-reset digest
+        opening += ("\n" + _DIGEST_PROMPT + ledger.digest() +
+                    "\n(This continues an interrupted analysis of the same "
+                    "share; checklist items above were already covered.)")
     _new_session(opening)
     llm_request(client, policy, messages, lambda l: say("ai", l), sem)
 
@@ -443,6 +474,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
             except Exception as exc:  # noqa: BLE001 — mark group unresolved
                 for e in entries:
                     ledger.record(e["path"], "UNRESOLVED", f"request failed: {exc}"[:80])
+                _checkpoint()
                 say("ai", f"  ! batch failed — {len(entries)} file(s) UNRESOLVED")
                 continue
             messages.append({"role": "assistant", "content": text})
@@ -459,6 +491,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
             say("ai", f"[ai] {share_name}: {len(verdicts)}/{len(entries)} "
                       f"verdict(s), {len(findings)} finding(s) "
                       f"(total {total_seen} files)")
+            _checkpoint()
     finally:
         if own_conn:
             try:

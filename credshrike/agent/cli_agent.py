@@ -243,14 +243,23 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
                         concurrency, lambda l: print(l))
 
     # full-domain: per-computer fan-out with orchestrator
+    if getattr(args, "resume", None) and preset != "full-domain":
+        raise SystemExit("error: --resume applies to full-domain runs only")
+
     if preset == "full-domain":
+        import os
+        if getattr(args, "resume", None):
+            if not os.path.isfile(os.path.join(args.resume, "run.json")):
+                raise SystemExit(
+                    f"error: {args.resume} is not a resumable run (no run.json)")
         from .orchestrator import run_domain_sweep
         run_domain_sweep(credential=credential, policy=policy,
                          audit_dir=args.audit_dir, dc=args.dc or "",
                          domain_source=args.source,
                          computers_filter=args.computers_filter or "",
                          max_hosts=args.max_hosts or None,
-                         concurrency=concurrency)
+                         concurrency=concurrency,
+                         resume_dir=args.resume)
         return
 
     # full (single host): code-side parallel dump + config banner, same as
@@ -532,6 +541,10 @@ def register(subparsers) -> None:
                         "(micro-batches of K files, shared session, code-side "
                         "ledger guarantees coverage); batch = dump-then-analyze "
                         "(default). CLI/policy; web UI has a dropdown")
+    p.add_argument("--resume", default=None, metavar="RUN_DIR",
+                   help="resume an interrupted full-domain run from its "
+                        "directory (contains run.json) — done hosts/shares "
+                        "are skipped, stream-mode file verdicts carry over")
     p.add_argument("--no-cache", action="store_true",
                    help="disable the shared inventory cache (runs/.cache/inventory.db)")
     p.add_argument("--refresh", action="store_true",

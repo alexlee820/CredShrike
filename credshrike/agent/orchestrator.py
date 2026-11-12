@@ -745,7 +745,7 @@ def merge_findings(all_findings: list[dict]) -> dict:
 def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential,
                     policy: Policy, dc: str, domain_source: str, computers: list,
                     client_factory, echo, read_threads: int = 10,
-                    emit=None) -> None:
+                    emit=None, state_store=None) -> None:
     """Sweep ONE host using PER-SHARE context windows. File reads within each
     share use ThreadPoolExecutor (SMB I/O parallelism). LLM analysis is
     sequential (one share at a time — avoids rate-limit storms) in batch
@@ -771,7 +771,8 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             _sweep_one_host_stream(entry, host, credential, policy, dc,
                                    domain_source, dumpable, session, audit,
                                    client_factory, echo, emit,
-                                   computers=[c.to_dict() for c in computers])
+                                   computers=[c.to_dict() for c in computers],
+                                   state_store=state_store)
             return
 
         all_findings: list[dict] = []
@@ -783,8 +784,23 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
         total_dump_stats = {"dirs_walked": 0, "files_seen": 0, "files_dumped": 0,
                             "bytes_read": 0, "errors": 0}
 
+        prior = state_store.load_host(host) if state_store else {}
+        entry.setdefault("shares_done", [])
         for si, share_info in enumerate(dumpable, 1):
             share_name = share_info["name"]
+            done_state = prior.get(share_name) or {}
+            if done_state.get("status") == "done":
+                all_reports.append(done_state.get("report") or f"### {share_name}")
+                all_findings.extend(done_state.get("findings") or [])
+                all_skipped.extend(done_state.get("skipped_ext") or [])
+                for entity, count in (done_state.get("masked_entities") or {}).items():
+                    masked_entities[entity] = masked_entities.get(entity, 0) + count
+                memory = done_state.get("memory") or memory
+                masked_total += int(done_state.get("masked") or 0)
+                entry["shares_done"].append(share_name)
+                echo(f"[share] ({si}/{len(dumpable)}) {host}/{share_name}: done in "
+                     f"previous session — reusing")
+                continue
 
             # Phase 1: dump THIS share — parallel file reads (SMB I/O)
             echo(f"[share] ({si}/{len(dumpable)}) {host}/{share_name}: dumping...")
@@ -814,6 +830,17 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
             all_reports.append(f"### {share_name}\n{share_report}")
             all_skipped.extend(skipped_ext)
             all_findings.extend(result["findings"])
+            if state_store is not None:
+                state_store.save(host, share_name, {
+                    "status": "done",
+                    "report": f"### {share_name}\n{share_report}",
+                    "findings": result["findings"],
+                    "skipped_ext": skipped_ext,
+                    "masked": int(result.get("masked", 0)),
+                    "masked_entities": result.get("masked_entities", {}),
+                    "memory": memory,
+                    "bytes_read": session.budget.bytes_read})
+                entry["shares_done"].append(share_name)
             echo(f"[share] {host}/{share_name}: {len(result['findings'])} "
                  f"finding(s) total")
 
@@ -840,7 +867,7 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 
 def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
                            dumpable, session, audit, client_factory, echo, emit,
-                           computers=None):
+                           computers=None, state_store=None):
     """stream mode: shares pipelined (each = walkers + one LLM thread),
     bounded by max_shares_in_flight and a global LLM request semaphore."""
     from concurrent.futures import ThreadPoolExecutor
@@ -867,6 +894,13 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
     def _run_share(si_share):
         si, share_info = si_share
         share_name = share_info["name"]
+        # resume an interrupted share file-level: seed the ledger from the
+        # last in-progress checkpoint (if any) and checkpoint every batch
+        partial = (state_store.load(host, share_name) or {}) if state_store else {}
+        resume_ledger = partial.get("ledger") if partial.get("status") == "in-progress" else None
+        if resume_ledger:
+            echo(f"[share] {host}/{share_name}: resuming from checkpoint "
+                 f"({len(resume_ledger.get('verdicts') or {})} file(s) already verdicted)")
         # shares run concurrently: no cross-share memory chain in stream mode
         result = analyze_share_streaming(
             credential=credential, policy=policy, audit=audit, session=session,
@@ -874,12 +908,33 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
             echo=echo, emit=emit, dc=dc, domain_source=domain_source,
             sem=sem, budget_lock=budget_lock,
             memory_block=f"({si}/{len(dumpable)}) ",
-            use_triage=bool(getattr(policy, "analysis_triage", False)))
+            use_triage=bool(getattr(policy, "analysis_triage", False)),
+            resume=resume_ledger,
+            state_sink=(lambda snap: state_store.save(host, share_name, snap))
+            if state_store is not None else None)
         with lock:
             results[share_name] = result
+            if state_store is not None and result.get("status") != "reused":
+                state_store.save(host, share_name, dict(result, status="done"))
+                entry.setdefault("shares_done", []).append(share_name)
 
-    with ThreadPoolExecutor(max_workers=min(in_flight, max(1, len(dumpable)))) as pool:
-        list(pool.map(_run_share, list(enumerate(dumpable, 1))))
+    # shares already completed in a previous session are reused verbatim
+    prior_states = state_store.load_host(host) if state_store else {}
+    entry.setdefault("shares_done", [])
+    todo = []
+    for si, share_info in enumerate(dumpable, 1):
+        share_name = share_info["name"]
+        done_state = prior_states.get(share_name) or {}
+        if done_state.get("status") == "done" and "stats" in done_state:
+            results[share_name] = done_state
+            entry["shares_done"].append(share_name)
+            echo(f"[share] {host}/{share_name}: done in previous session — reusing")
+        else:
+            todo.append((si, share_info))
+
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(in_flight, max(1, len(todo)))) as pool:
+            list(pool.map(_run_share, todo))
 
     for share_info in dumpable:               # deterministic report order
         share_name = share_info["name"]
@@ -951,7 +1006,7 @@ def _finish_host_report(entry, host, session, audit, policy,
 
 def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                            domain_source, computers, client_factory, echo,
-                           read_threads=10, emit=None):
+                           read_threads=10, emit=None, state_store=None):
     """Sweep one host with transient-error retry. Fills entry fields on
     success; records errors."""
     echo(f"[domain] {host}: START sweep")
@@ -966,7 +1021,8 @@ def _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
         try:
             _sweep_one_host(entry, host, run_dir, credential, policy, dc,
                             domain_source, computers, client_factory, echo,
-                            read_threads=read_threads, emit=emit)
+                            read_threads=read_threads, emit=emit,
+                            state_store=state_store)
             return
         except Exception as exc:  # noqa: BLE001
             message = str(exc).lower()
@@ -1074,7 +1130,8 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                      computers_filter: str = "", max_hosts: Optional[int] = None,
                      client_factory: Optional[Callable] = None, echo=print,
                      source_override=None, reachable_check: Optional[Callable] = None,
-                     concurrency: int = 0, emit=None) -> dict:
+                     concurrency: int = 0, emit=None,
+                     resume_dir: Optional[str] = None) -> dict:
     """Sweep a domain. Hosts are SEQUENTIAL (one at a time — LLM analysis is
     the bottleneck, not host discovery). Within each share, files are read
     in PARALLEL via ThreadPoolExecutor (SMB I/O parallelism). The
@@ -1090,9 +1147,52 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     if client_factory is None:
         client_factory = lambda: _make_client(policy)  # noqa: E731
 
-    computers = _resolve_computers(credential, dc, domain_source,
-                                   computers_filter, source_override)
+    # ---- resume vs fresh: establish run_dir + manifest -------------------- #
+    from ..runstate import (RunManifest, ShareStateStore,
+                           fingerprint_components, fingerprint_diff,
+                           load_host_result)
+
+    resumed = resume_dir is not None
+    if resumed:
+        manifest = RunManifest.load(resume_dir)
+        changed = fingerprint_diff(
+            manifest.data.get("fingerprint_components") or {},
+            dc, domain_source, computers_filter, max_hosts, policy)
+        if changed:
+            raise ValueError(
+                "cannot resume — parameters changed since the run started: "
+                + ", ".join(changed))
+        from ..domain.base import ComputerRecord
+        computers = [ComputerRecord(**d)
+                     for d in manifest.data.get("computers") or []]
+        run_dir = resume_dir
+    else:
+        computers = _resolve_computers(credential, dc, domain_source,
+                                       computers_filter, source_override)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        run_dir = os.path.join(audit_dir, f"domain_{stamp}")
+        os.makedirs(run_dir, exist_ok=True)
+        manifest = RunManifest.create(
+            run_dir, hosts=[],
+            components=fingerprint_components(dc, domain_source,
+                                              computers_filter, max_hosts, policy),
+            computers=[c.to_dict() for c in computers])
+    state_store = ShareStateStore(run_dir)
     hosts = [c.dns_name or c.cn for c in computers]
+    if max_hosts:
+        hosts = hosts[:max_hosts]
+    manifest.data["hosts_order"] = list(hosts)
+    for h in hosts:
+        manifest.data["hosts"].setdefault(
+            h, {"status": "pending", "error": "", "shares": [],
+                "shares_done": [], "html": "", "audit_path": "",
+                "findings_count": 0, "tool_calls": 0, "bytes_read": 0})
+    if resumed:
+        done_before = sum(1 for h in hosts
+                          if manifest.host_status(h) == "done")
+        echo(f"[domain] RESUMING {run_dir}: {done_before}/{len(hosts)} host(s) "
+             f"done, {sum(len(manifest.data['hosts'][h].get('shares_done', [])) for h in hosts)} "
+             f"share(s) checkpointed")
     transport = "adws (net.tcp 9389)" if domain_source == "adws" else \
                f"ldap (389) [{domain_source}]" if domain_source == "ldap" else \
                f"auto → ldap (389) [requested: {domain_source}]"
@@ -1106,18 +1206,45 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
         echo(f"[domain] PARALLEL FILE READS: {concurrency} threads per share — "
              f"SMB I/O runs concurrently; hosts are sequential")
 
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    run_dir = os.path.join(audit_dir, f"domain_{stamp}")
-    os.makedirs(run_dir, exist_ok=True)
-
     started = time.time()
+    if resumed:
+        # wall-clock gate must account for the time already spent
+        started -= float(manifest.budget_spend().get("elapsed_s") or 0.0)
     results: list[dict] = []
 
+    # seed the results list: DONE hosts recover their findings/reports for
+    # the final merge; partially-swept hosts keep their spent counters so
+    # the global budget gate stays honest
+    for host in hosts:
+        if manifest.host_status(host) == "done":
+            results.append(load_host_result(run_dir, host))
+            continue
+        prior = manifest.data["hosts"].get(host, {})
+        results.append({"host": host, "status": "pending", "error": "",
+                        "shares": prior.get("shares", []), "findings": [],
+                        "report_md": "", "audit_path": "",
+                        "html": prior.get("html", ""),
+                        "tool_calls": int(prior.get("tool_calls") or 0),
+                        "bytes_read": int(prior.get("bytes_read") or 0),
+                        "shares_done": prior.get("shares_done", [])})
+    if resumed:
+        # spend recorded in the manifest but not attributable to any host
+        # entry (crash mid-sweep) still counts against the global gate —
+        # attribute the deficit to the first host that still has to run
+        deficit = int(manifest.budget_spend().get("bytes_read") or 0) - \
+            sum(r["bytes_read"] for r in results)
+        if deficit > 0:
+            for r in results:
+                if r["status"] != "done":
+                    r["bytes_read"] += deficit
+                    break
+
     for index, host in enumerate(hosts, 1):
-        entry = {"host": host, "status": "pending", "error": "", "shares": [],
-                 "findings": [], "report_md": "", "audit_path": "", "html": "",
-                 "tool_calls": 0, "bytes_read": 0}
-        results.append(entry)
+        entry = results[index - 1]
+        if entry.get("status") == "done":
+            echo(f"[domain] ({index}/{len(hosts)}) {host}: done in previous "
+                 f"session — skipping")
+            continue
         # budget gate
         total_bytes = sum(r["bytes_read"] for r in results)
         total_calls = sum(r["tool_calls"] for r in results)
@@ -1125,16 +1252,26 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                 total_bytes >= policy.max_total_read_bytes or \
                 time.time() - started > policy.wall_clock_seconds:
             entry["status"] = "skipped-budget"
+            _update_manifest_host(manifest, entry, started,
+                                  total_bytes=total_bytes, total_calls=total_calls)
             echo(f"[domain] {host}: SKIPPED — global budget exhausted")
             continue
         if not reachable_check(host):
             entry["status"] = "unreachable"
+            _update_manifest_host(manifest, entry, started,
+                                  total_bytes=total_bytes, total_calls=total_calls)
             echo(f"[domain] {host}: SMB 445 unreachable — skipped")
             continue
+        manifest.mark_host(host, status="in-progress")
+        manifest.save()
         echo(f"[domain] ({index}/{len(hosts)}) {host}: sweeping")
         _sweep_host_with_retry(entry, host, run_dir, credential, policy, dc,
                                domain_source, computers, client_factory, echo,
-                               read_threads=concurrency, emit=emit)
+                               read_threads=concurrency, emit=emit,
+                               state_store=state_store)
+        _update_manifest_host(manifest, entry, started,
+                              total_bytes=sum(r["bytes_read"] for r in results),
+                              total_calls=sum(r["tool_calls"] for r in results))
 
     merged = merge_findings([f for r in results for f in r["findings"]])
     context = {"principal": credential.redacted()["principal"],
@@ -1147,10 +1284,38 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
     write_domain_index(index_path, context=context, hosts=results,
                        merged=merged, computers=[c.to_dict() for c in computers])
 
+    manifest.mark_complete()
     done = sum(1 for r in results if r["status"] == "done")
     n_creds = len(merged["credentials"])
     elapsed = int(time.time() - started)
     echo(f"[domain] sweep complete: {done}/{len(results)} hosts swept, "
          f"{n_creds} unique credential(s), {elapsed}s — index: {index_path}")
+    from ..smb_session import active_inventory_cache
+    cache = active_inventory_cache()
+    cache_stats = cache.stats() if cache is not None else None
+    if cache_stats and (cache_stats["hits"] or cache_stats["misses"]):
+        echo(f"[cache] {cache_stats['hits']} hit(s) / {cache_stats['misses']} "
+             f"miss(es), {cache_stats['bytes_served'] // 1024} KiB served "
+             f"from {cache_stats['db_path']}")
     return {"hosts": results, "merged": merged, "index_html": index_path,
-            "run_dir": run_dir, "computers": [c.to_dict() for c in computers]}
+            "run_dir": run_dir, "computers": [c.to_dict() for c in computers],
+            "resumed": resumed, "cache": cache_stats}
+
+
+def _update_manifest_host(manifest, entry: dict, started: float,
+                          total_bytes: int = 0, total_calls: int = 0) -> None:
+    """Persist one host's outcome + the global budget spend (atomic)."""
+    manifest.mark_host(
+        entry["host"],
+        status=entry.get("status", "pending"),
+        error=entry.get("error", ""),
+        shares=entry.get("shares", []),
+        shares_done=entry.get("shares_done", []),
+        html=entry.get("html", ""),
+        audit_path=entry.get("audit_path", ""),
+        findings_count=len(entry.get("findings") or []),
+        tool_calls=int(entry.get("tool_calls") or 0),
+        bytes_read=int(entry.get("bytes_read") or 0))
+    manifest.record_budget(bytes_read=total_bytes, tool_calls=total_calls,
+                           elapsed_s=max(0.0, time.time() - started))
+    manifest.save()
