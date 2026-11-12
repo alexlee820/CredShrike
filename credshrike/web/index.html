@@ -295,6 +295,14 @@
       </div>
     </details>
 
+    <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+      <label style="margin:0;min-width:0">Resume run</label>
+      <select id="resumeRun" style="flex:1"><option value="">— new run —</option></select>
+      <button id="refreshRuns" type="button" style="width:auto;padding:4px 10px">⟳</button>
+    </div>
+    <div class="hint" id="resumeHint" style="display:none">
+      Resuming reuses the sweep parameters saved in the run manifest; credentials
+      still come from this form. Coverage-shaping changes are rejected.</div>
     <button id="startBtn">Start run</button>
     <div class="hint">Credentials stay on this machine · server binds 127.0.0.1</div>
   </section>
@@ -349,9 +357,28 @@ function syncGoalVisibility() {
 $('preset').onchange = syncGoalVisibility;
 syncGoalVisibility();   // page load: default preset (full-domain) hides Goal too
 
+async function loadResumeRuns() {
+  try {
+    const res = await fetch('/api/runs/history');
+    const data = await res.json();
+    const sel = $('resumeRun');
+    const pick = sel.value;
+    sel.innerHTML = '<option value="">— new run —</option>' +
+      (data.runs || []).filter(r => r.resumable).map(r =>
+        `<option value="${r.run_dir}">${r.run_dir.split(/[\/]).pop()} — ` +
+        `${r.hosts_done}/${r.hosts_total} hosts, ${r.shares_done} share(s) checkpointed</option>`
+      ).join('');
+    if (pick) sel.value = pick;
+  } catch (e) { /* history is best-effort */ }
+}
+$('refreshRuns').onclick = loadResumeRuns;
+$('resumeRun').onchange = () =>
+  $('resumeHint').style.display = $('resumeRun').value ? '' : 'none';
+loadResumeRuns();
 $('startBtn').onclick = async () => {
   const params = {
     preset: $('preset').value,
+    resume_dir: $('resumeRun').value || '',
     goal: $('goal').value.trim(),
     host: $('host').value.trim(), dc: $('dc').value.trim(),
     domain_source: $('domainSource').value,

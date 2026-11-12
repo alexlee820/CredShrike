@@ -144,6 +144,30 @@ def _execute_run(state: RunState) -> None:
             from .socks_proxy import apply_socks_proxy
             apply_socks_proxy(policy.socks_proxy)
 
+        # resume an interrupted sweep: run params come from the manifest,
+        # credentials from this form; fingerprint mismatches surface as
+        # state.error via the except below
+        if params.get("resume_dir"):
+            from .agent.orchestrator import run_domain_sweep
+            from .runstate import RunManifest
+            resume_dir = params["resume_dir"]
+            RunManifest.load(resume_dir)   # fail fast on a bad path
+            summary = run_domain_sweep(
+                credential=credential, policy=policy,
+                audit_dir=os.path.dirname(os.path.abspath(resume_dir)) or "runs",
+                client_factory=lambda: (_client_factory() if _client_factory
+                                        else _build_client(params)),
+                echo=state.push, emit=state.push_event,
+                resume_dir=resume_dir)
+            done = sum(1 for h in summary["hosts"] if h["status"] == "done")
+            state.report = (f"Resumed run: {done}/{len(summary['hosts'])} host(s), "
+                            f"{len(summary['merged']['credentials'])} credential(s). "
+                            f"Report: {summary['index_html']}")
+            state.report_html_path = summary["index_html"]
+            state.audit_path = summary["run_dir"]
+            state.status = "done"
+            return
+
         # default preset: bare runs (no preset AND no goal) → full-domain sweep
         effective_preset = params.get("preset") or \
             ("" if params.get("goal") else "full-domain")
@@ -428,6 +452,14 @@ def create_run():
     params = request.get_json(force=True, silent=True) or {}
     run_id = _start_run(params)
     return jsonify({"id": run_id})
+
+
+@app.route("/api/runs/history")
+def runs_history():
+    """Resumable runs on disk (pure scan — survives webapp restarts)."""
+    from .runstate import scan_run_dirs
+    audit_dir = request.args.get("audit_dir") or "runs"
+    return jsonify({"runs": scan_run_dirs(audit_dir)})
 
 
 @app.route("/api/runs", methods=["GET"])

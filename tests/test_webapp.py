@@ -422,3 +422,100 @@ def test_logo_served(client):
     # the UI links it as favicon and shows it in the header
     html = client.get("/").get_data(as_text=True)
     assert 'href="/logo.svg"' in html and 'src="/logo.svg"' in html
+
+
+def test_runs_history_lists_resumable(tmp_path, client):
+    """The resume dropdown's data source: a disk scan (survives restarts)."""
+    from credshrike.config import Policy
+    from credshrike.runstate import (RunManifest, ShareStateStore,
+                                     fingerprint_components)
+    import credshrike.runstate as rs
+
+    # interrupted run: one host done, one pending
+    run = tmp_path / "domain_20261112T101010Z"
+    run.mkdir(parents=True)
+    mf = RunManifest.create(str(run), hosts=["ws01.corp.local", "ws02.corp.local"],
+                            components=fingerprint_components("dc01", "ldap", "",
+                                                              None, Policy()),
+                            computers=[])
+    mf.mark_host("ws01.corp.local", status="done", shares_done=["IT"])
+    mf.save()
+    # complete run: not resumable
+    done = tmp_path / "domain_20261112T111111Z"
+    done.mkdir()
+    mf2 = RunManifest.create(str(done), hosts=["ws01.corp.local"],
+                             components=fingerprint_components("dc01", "ldap", "",
+                                                               None, Policy()),
+                             computers=[])
+    mf2.mark_host("ws01.corp.local", status="done")
+    mf2.mark_complete()
+
+    res = client.get(f"/api/runs/history?audit_dir={tmp_path}")
+    runs = {r["run_dir"]: r for r in res.get_json()["runs"]}
+    assert runs[str(run)]["resumable"] is True
+    assert runs[str(run)]["hosts_done"] == 1 and runs[str(run)]["shares_done"] == 1
+    assert runs[str(done)]["resumable"] is False
+
+
+def test_web_resume_run(client, monkeypatch, tmp_path):
+    """POST /api/runs with resume_dir: done host untouched, pending host
+    analyzed, status done."""
+    import credshrike.agent.orchestrator as orch
+    import credshrike.smb_session as smb_mod
+    from test_agent import FakeSMB
+    from credshrike.config import Policy
+    from credshrike.domain.base import ComputerRecord
+    from credshrike.runstate import (RunManifest, ShareStateStore,
+                                     fingerprint_components)
+    import credshrike.agent.session as session_mod
+
+    fake = FakeSMB()
+    monkeypatch.setattr(session_mod.AgentSession, "smb", lambda self, host: fake)
+
+    def _no_real(*a, **k):
+        raise ConnectionError("no real SMB in tests")
+    monkeypatch.setattr(smb_mod, "create_smb_session", _no_real)
+    monkeypatch.setattr(orch, "_resolve_computers",
+                        lambda *a, **k: [ComputerRecord(cn="WS02", dns_name="ws02.corp.local")])
+    monkeypatch.setattr(orch, "_port_open", lambda host, port=445, timeout=3: True)
+
+    goals = []
+    from test_orchestrator import _client_factory_for_hosts
+    factory = _client_factory_for_hosts(
+        {"ws02.corp.local": [{"severity": "high", "category": "credential",
+                              "host": "ws02", "share": "IT", "path": "b.csv",
+                              "username": "svc", "secret": "Pass9",
+                              "evidence": "e", "note": ""}]})
+    monkeypatch.setattr(webapp, "_client_factory", factory)
+
+    # an interrupted run: ws01 done (with persisted findings), ws02 pending
+    run = tmp_path / "domain_20261112T101010Z"
+    run.mkdir(parents=True)
+    policy = Policy()
+    mf = RunManifest.create(str(run), hosts=["ws01.corp.local", "ws02.corp.local"],
+                            components=fingerprint_components("", "auto", "", None, policy),
+                            computers=[{"cn": "WS01", "dns_name": "ws01.corp.local"},
+                                       {"cn": "WS02", "dns_name": "ws02.corp.local"}])
+    mf.mark_host("ws01.corp.local", status="done", shares_done=["IT"],
+                 findings_count=1, html="old.html")
+    mf.save()
+    ShareStateStore(str(run)).save("ws01.corp.local", "IT", {
+        "status": "done", "report": "### IT", "findings": [
+            {"severity": "high", "category": "credential", "host": "ws01",
+             "share": "IT", "path": "a.ps1", "username": "svc",
+             "secret": "SamePass1", "evidence": "e", "note": ""}],
+        "bytes_read": 10})
+
+    run_id = client.post("/api/runs", json=_params(
+        preset="full-domain", goal="", resume_dir=str(run),
+        audit_dir=str(tmp_path))).get_json()["id"]
+    s = _wait_status(client, run_id, {"done", "error"}, timeout=20)
+    assert s["status"] == "done", s.get("error")
+    assert s["report_html"], "index was not written"
+
+    secrets = set()
+    import json as _json
+    index = client.get(f"/api/runs/{run_id}/report_html").get_data(as_text=True)
+    assert "SamePass1" in index and "Pass9" in index
+    # the persisted host was never re-analyzed
+    assert "ws01" not in str(factory.state["goals"])
