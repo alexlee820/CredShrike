@@ -877,7 +877,7 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
     sem = api_semaphore(getattr(policy, "max_concurrent_llm", 2))
     budget_lock = threading.Lock()
     echo(f"[domain] {host}: STREAM analysis — shares pipelined "
-         f"(max {in_flight} in flight, {getattr(policy, 'max_concurrent_llm', 2)} "
+         f"(max {in_flight} in flight, {getattr(policy, 'max_concurrent_llm', 4)} "
          f"concurrent LLM requests)")
 
     all_findings: list[dict] = []
@@ -1066,7 +1066,7 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
         "--mask-semantic" if policy.mask_semantic else "",
         f"--skip-exts '{','.join(policy.dump_skip_exts[:6])}...'" if policy.dump_skip_exts else "",
         f"--analysis-mode {policy.analysis_mode}" if getattr(policy, "analysis_mode", "batch") != "batch" else "",
-        f"--max-concurrent-llm {policy.max_concurrent_llm}" if getattr(policy, "max_concurrent_llm", 2) != 2 else "",
+        f"--max-concurrent-llm {policy.max_concurrent_llm}" if getattr(policy, "max_concurrent_llm", 4) != 4 else "",
         f"--socks-proxy {policy.socks_proxy}" if getattr(policy, "socks_proxy", "") else "",
         "--debug" if policy.debug else "",
     ]

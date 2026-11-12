@@ -25,8 +25,8 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "analysis_group_files": 10,         # K files per request
     "analysis_group_wait_ms": 2000,     # wait this long to fill a group
     "analysis_reset_ratio": 0.7,        # session reset at 70% of the context budget
-    "max_concurrent_llm": 2,            # global in-flight LLM requests
-    "max_shares_in_flight": 2,          # shares pipelined concurrently (stream)
+    "max_concurrent_llm": 4,            # global in-flight LLM requests
+    "max_shares_in_flight": 4,          # shares pipelined concurrently (stream)
     # Use the Snaffler 4-layer triage to decide WHICH files the LLM reads
     # (stream analysis): junk discarded, artifacts (.kdbx/NTDS.DIT/.ssh/...)
     # reported WITHOUT reading, relay files streamed to the LLM. Detection

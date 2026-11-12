@@ -227,8 +227,8 @@ directory walkers (read_threads=10)               ← producers
 ```
 
 - Detection stays 100% LLM; the walkers only move paths.
-- Shares run in parallel: up to `max_shares_in_flight` (2) concurrently, all
-  LLM calls throttled by a global `max_concurrent_llm` (2) semaphore.
+- Shares run in parallel: up to `max_shares_in_flight` (4) concurrently, all
+  LLM calls throttled by a global `max_concurrent_llm` (4) semaphore.
 - Web UI monitor gets separate Walking/AI-thread tabs with share chips.
 
 ### analysis_triage (Snaffler read/no-read rules)
@@ -426,7 +426,7 @@ as a starting point.
 | `--audit-dir` | Directory for audit logs (default: `runs/`) |
 | `--analysis-mode` | `batch` (default) / `stream` |
 | `--analysis-triage` / `--no-analysis-triage` | Snaffler read/no-read rules (implies stream) |
-| `--max-concurrent-llm` | Global LLM concurrency (default 2) |
+| `--max-concurrent-llm` | Global LLM concurrency (default 4) |
 | `--stream` / `--no-stream` | SSE token streaming (default on) |
 | `--prompt-cache` / `--no-prompt-cache` | Prompt caching (default on) |
 | `--mask-pii` | Mask PII before it reaches the model |

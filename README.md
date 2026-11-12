@@ -154,7 +154,7 @@ semaphore, and the web UI monitor gets separate Walking/AI-thread tabs with
 share filter chips. `batch` remains the default.
 
 ```bash
-credshrike agent --preset full-domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 2
+credshrike agent --preset full-domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 4
 ```
 
 ### Regex-Sweep Credential Triage (fast, cheap — formerly "snaffler")
