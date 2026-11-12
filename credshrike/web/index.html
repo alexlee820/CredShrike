@@ -153,6 +153,8 @@
         <input id="apiBaseUrl" placeholder="https://api.deepseek.com/anthropic"/></div>
       <div class="field"><label>API key (optional — else ANTHROPIC_API_KEY)</label>
         <input id="apiKey" type="password" placeholder="sk-..."/></div>
+      <div class="field"><label>SOCKS proxy (optional — SMB/LDAP/ADWS only, LLM direct)</label>
+        <input id="socksProxy" placeholder="socks5h://127.0.0.1:1080"/></div>
     </div>
 
     <div id="authFields">
@@ -244,10 +246,8 @@
       </div>
     </details>
     <details>
-      <summary>advanced — read gate, redaction, proxy &amp; debug</summary>
+      <summary>advanced — read gate, redaction &amp; debug</summary>
       <div class="grid2" style="margin-top:10px">
-        <div class="field"><label>SOCKS proxy (optional — SMB/LDAP/ADWS only, LLM direct)</label>
-          <input id="socksProxy" placeholder="socks5h://127.0.0.1:1080"/></div>
         <div class="field" style="flex-direction:row;align-items:center;gap:8px">
           <input type="checkbox" id="debugMode" style="width:auto"/>
           <label style="margin:0" for="debugMode">Debug — show FULL tool results
