@@ -128,14 +128,14 @@ credshrike agent \
     --api-key <key>
 ```
 
-No `--preset` needed — bare invocation defaults to `full-domain`. The tool
+No `--preset` needed — bare invocation defaults to `domain`. The tool
 will enumerate all computers, dump every share, and produce a combined
 report with cross-host credential merging.
 
 ### Single Host, Full Content Review
 
 ```bash
-credshrike agent --host FILE01.hackaday.lab ... --preset full
+credshrike agent --host FILE01.hackaday.lab ... --preset host
 ```
 
 ### Streaming Analysis (optional, faster wall clock)
@@ -154,7 +154,7 @@ semaphore, and the web UI monitor gets separate Walking/AI-thread tabs with
 share filter chips. `batch` remains the default.
 
 ```bash
-credshrike agent --preset full-domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 4
+credshrike agent --preset domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 4
 ```
 
 ### Regex-Sweep Credential Triage (fast, cheap — formerly "snaffler")
@@ -167,7 +167,7 @@ credshrike agent --host FILE01.hackaday.lab ... --preset regex-sweep
 This preset is a canned goal (same agent loop as custom goals) driving the
 `smb_scan_share` tool: Snaffler's 4-layer triage decides what to look at,
 regex scans relay files, the AI judges hits / reads data files / checks
-exposure. For LLM-only detection use full/full-domain + stream +
+exposure. For LLM-only detection use host/domain + stream +
 `--analysis-triage`.
 
 ### Web UI
@@ -221,7 +221,7 @@ the client network when it does. CredShrike has native split routing
 instead:
 
 ```bash
-credshrike agent --preset full --host filesrv01 ... \
+credshrike agent --preset host --host filesrv01 ... \
     --socks-proxy socks5h://127.0.0.1:1080
 ```
 
@@ -256,9 +256,9 @@ Permission/ACL probes are never cached. `--no-cache` disables,
 
 ```bash
 # the sweep died halfway — continue where it left off
-credshrike agent --preset full-domain ... --resume runs/domain_20261112T101010Z
+credshrike agent --preset domain ... --resume runs/domain_20261112T101010Z
 # or let CredShrike pick the newest interrupted run
-credshrike agent --preset full-domain ... --resume latest
+credshrike agent --preset domain ... --resume latest
 # not sure which? every run echoes its dir at startup, and:
 credshrike runs list
 ```
@@ -310,7 +310,7 @@ the harness still produces a report with the real evidence but a cloud or
 local model never receives the values.
 
 ```bash
-credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
+credshrike agent --preset domain --dc dc01 --user svc --password '...' \
   --mask-pii --mask-secrets
 ```
 
@@ -345,7 +345,7 @@ credshrike agent --preset full-domain --dc dc01 --user svc --password '...' \
 - `--no-mask-restore` leaves placeholders in the output (maximum privacy).
 - `mask_allowlist` / `mask_denylist` in the policy file handle names, codenames
   and company-specific IDs.
-- Masking applies to every content path: share dumps in `full`/`full-domain`,
+- Masking applies to every content path: share dumps in `host`/`domain`,
   and tool results for custom goals and `snaffler`.
 
 ### Semantic backend (GLiNER)
@@ -360,7 +360,7 @@ global call threshold defaults to 0.5 so it does not raise those floors),
 
 ```bash
 pip install "credshrike[semantic]"      # pulls torch; model is ~1.1 GB
-credshrike agent --preset full --host filesrv01 ... \
+credshrike agent --preset host --host filesrv01 ... \
   --mask-secrets --mask-semantic
 ```
 
@@ -371,7 +371,7 @@ credshrike agent --preset full --host filesrv01 ... \
   context. It is loaded eagerly when configured, and if it cannot load the run
   **fails closed** — CredShrike will not send unmasked content.
 - CPU inference is slow (hundreds of ms per 384-token window), so a large
-  `--preset full` sweep takes noticeably longer; a GPU/`CUDA` torch install
+  `--preset host` sweep takes noticeably longer; a GPU/`CUDA` torch install
   helps.
 - Override the checkpoint with `--mask-semantic-model` (HF repo ID or local
   path) or tune `mask_semantic_threshold` / `mask_semantic_floors` in policy.
@@ -389,7 +389,7 @@ Standalone use (no SMB, no LLM): `credshrike mask --semantic < incident.log`.
 
 ```
 runs/
-├── domain_<timestamp>/           ← full-domain sweep
+├── domain_<timestamp>/           ← domain sweep
 │   ├── <host>.jsonl             ← per-host audit log
 │   ├── <host>.report.html       ← per-host full report
 │   └── index.html               ← combined: coverage matrix +

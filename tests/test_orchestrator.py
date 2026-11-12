@@ -187,13 +187,16 @@ def test_merge_findings_unit():
     assert len(merged["other"]) == 1
 
 
-def test_resolve_preset_default_is_full_domain():
+def test_resolve_preset_default_is_domain():
     from credshrike.agent.cli_agent import _resolve_preset
     from types import SimpleNamespace as NS
-    # bare invocation -> full-domain default
-    assert _resolve_preset(NS(preset=None, goal=None, repl=False)) == "full-domain"
-    # explicit preset / goal / repl win
-    assert _resolve_preset(NS(preset="snaffler", goal=None, repl=False)) == "snaffler"
+    # bare invocation -> domain-wide sweep (canonical name)
+    assert _resolve_preset(NS(preset=None, goal=None, repl=False)) == "domain"
+    # explicit preset / goal / repl win; old spellings normalize
+    assert _resolve_preset(NS(preset="regex-sweep", goal=None, repl=False)) == "regex-sweep"
+    assert _resolve_preset(NS(preset="snaffler", goal=None, repl=False)) == "regex-sweep"
+    assert _resolve_preset(NS(preset="full", goal=None, repl=False)) == "host"
+    assert _resolve_preset(NS(preset="full-domain", goal=None, repl=False)) == "domain"
     assert _resolve_preset(NS(preset=None, goal="find x", repl=False)) is None
     assert _resolve_preset(NS(preset=None, goal=None, repl=True)) is None
 

@@ -208,14 +208,29 @@ def _resolve_latest_resume(audit_dir: str) -> str:
     return runs[0]["run_dir"]
 
 
+# canonical preset names are scope words; the old "full" names remain
+# accepted as deprecated aliases (same treatment snaffler got)
+PRESET_ALIASES = {"full": "host", "full-domain": "domain",
+                  "snaffler": "regex-sweep"}
+DOMAIN_PRESET = "domain"
+HOST_PRESET = "host"
+
+
+def normalize_preset(name):
+    """Map any accepted spelling to its canonical preset name."""
+    if not name:
+        return name
+    return PRESET_ALIASES.get(name, name)
+
+
 def _resolve_preset(args) -> Optional[str]:
     """Effective preset: explicit wins; bare invocation (no preset, no goal,
-    not REPL) defaults to full-domain — the per-computer fan-out sweep."""
+    not REPL) defaults to the domain-wide fan-out sweep."""
     if args.preset:
-        return args.preset
+        return normalize_preset(args.preset)
     if getattr(args, "goal", None) or getattr(args, "repl", False):
         return None
-    return "full-domain"
+    return DOMAIN_PRESET
 
 
 def cmd_agent(args) -> None:
@@ -249,16 +264,16 @@ def cmd_agent(args) -> None:
 
 def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
 
-    # config banner for EVERY preset (full-domain, full, snaffler, custom)
+    # config banner for EVERY preset (domain, host, regex-sweep, custom)
     from .orchestrator import _print_config_banner
     _print_config_banner(credential, policy, args.dc or "", args.source,
                         concurrency, lambda l: print(l))
 
-    # full-domain: per-computer fan-out with orchestrator
-    if getattr(args, "resume", None) and preset != "full-domain":
-        raise SystemExit("error: --resume applies to full-domain runs only")
+    # domain: per-computer fan-out with orchestrator
+    if getattr(args, "resume", None) and preset != DOMAIN_PRESET:
+        raise SystemExit("error: --resume applies to domain-sweep runs only")
 
-    if preset == "full-domain":
+    if preset == DOMAIN_PRESET:
         import os
         if getattr(args, "resume", None):
             if args.resume == "latest":
@@ -279,7 +294,7 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
 
     # full (single host): code-side parallel dump + config banner, same as
     # full-domain but for just the specified host(s)
-    if preset == "full":
+    if preset == HOST_PRESET:
         from .orchestrator import _dump_single_share, _analyze_share_batches
         from .session import AgentSession
         from ..report import write_report
@@ -496,19 +511,20 @@ def register(subparsers) -> None:
                    help="YAML file of {name: regex} patterns added to the built-in "
                         "set for smb_scan_share (same name replaces built-in)")
     p.add_argument("--preset",
-                   choices=["regex-sweep", "snaffler", "full", "full-domain"],
+                   choices=["domain", "host", "regex-sweep", "custom",
+                            "full-domain", "full", "snaffler"],
                    default=None,
-                   help="canned goal: 'regex-sweep' = regex triage sweep then AI "
-                        "judgment (fast/cheap; 'snaffler' is a deprecated alias); "
-                        "'full' = smb_dump_share EVERY file (any format) then "
-                        "extraction — full-content review; 'full-domain' = "
-                        "per-computer fan-out (own context window per host, "
-                        "merged cross-host credentials + index report)")
+                   help="scope of the sweep: 'domain' = every computer in the "
+                        "domain (own context window per host, merged cross-host "
+                        "credentials + index report); 'host' = full-content "
+                        "review of the explicit --host(s) only; 'regex-sweep' = "
+                        "regex triage then AI judgment (fast/cheap). Old names "
+                        "'full-domain'/'full'/'snaffler' still work as aliases")
     p.add_argument("--computers-filter", default="",
-                   help="full-domain: extra LDAP filter for host selection, e.g. "
+                   help="domain: extra LDAP filter for host selection, e.g. "
                         "'(operatingSystem=*Server*)'")
     p.add_argument("--max-hosts", type=int, default=None,
-                   help="full-domain: cap the number of computers swept")
+                   help="domain: cap the number of computers swept")
     p.add_argument("--concurrency", type=int, default=None,
                    help="parallel file-read threads per share (default: "
                         "policy.read_threads = 10; try 3-4 on slow SMB, "

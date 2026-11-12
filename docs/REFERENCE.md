@@ -4,7 +4,7 @@
 
 1. [Architecture Overview](#architecture-overview)
 2. [Presets & Workflows](#presets--workflows)
-   - [full-domain (default)](#full-domain-default)
+   - [domain (default)](#domain-default)
    - [full](#full)
    - [regex-sweep (formerly snaffler)](#regex-sweep-formerly-snaffler)
    - [custom goal](#custom-goal)
@@ -66,7 +66,7 @@
 
 ## Presets & Workflows
 
-### full-domain (default)
+### domain (default)
 
 **What it does:** Sweeps every computer in the domain. Each host gets its own
 isolated context window. File reading is deterministic (code-side, not LLM-driven).
@@ -132,7 +132,7 @@ The model calls `smb_dump_share` itself (paged).
 ⑤ Findings extraction → per-host report
 ```
 
-**Difference from full-domain:** The model decides when/what to dump (tool
+**Difference from domain:** The model decides when/what to dump (tool
 calls appear in the audit). Full-domain does the dump before the model sees
 anything.
 
@@ -200,7 +200,7 @@ chooses its own strategy and tools.
 
 ## Analysis Modes & Triage
 
-Applies to `full` / `full-domain` (not regex-sweep, which is always triage +
+Applies to `host` / `domain` (not regex-sweep, which is always triage +
 regex + LLM-judgment by design).
 
 ### batch (default)
@@ -403,14 +403,14 @@ as a starting point.
 
 | Flag | Description |
 |------|-------------|
-| `--preset` | `full-domain` (default when bare) / `full` / `regex-sweep` (`snaffler` = deprecated alias) |
+| `--preset` | `domain` (default when bare — every computer) / `host` (explicit --host(s)) / `regex-sweep`. Old names `full-domain`/`full`/`snaffler` still work as deprecated aliases |
 | `--goal` | Custom goal (skips preset, one-shot mode) |
-| `--repl` | Force interactive REPL (bare invocation defaults to full-domain) |
+| `--repl` | Force interactive REPL (bare invocation defaults to the domain sweep) |
 | `--host` | Host scope (comma-separated for multi-host) |
 | `--dc` | Domain controller for domain queries |
 | `--source` | Directory transport: `auto`(=LDAP) / `ldap` / `adws` |
-| `--computers-filter` | full-domain: LDAP filter for host selection |
-| `--max-hosts` | full-domain: cap the number of computers swept |
+| `--computers-filter` | domain: LDAP filter for host selection |
+| `--max-hosts` | domain: cap the number of computers swept |
 | `--read-gate` | `none` / `ai` / `size` |
 | `--max-read-tokens` | ai gate threshold |
 | `--flag-oversize-mb` | size gate threshold in MB |
@@ -438,7 +438,7 @@ as a starting point.
 | `--mask-email-domain` | Surrogate email domain (default `corp.local`) |
 | `--mask-netbios-domain` | Surrogate NetBIOS domain (default `corp`) |
 | `--socks-proxy` | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos only — LLM direct (`socks5h://` = DNS at the proxy); shared across smb/domain/agent subcommands |
-| `--resume RUN_DIR` | full-domain only: continue an interrupted run (done hosts/shares skipped, stream file verdicts carried over, budget restored). `--resume latest` picks the newest resumable run; `credshrike runs list` shows them all |
+| `--resume RUN_DIR` | domain sweeps only: continue an interrupted run (done hosts/shares skipped, stream file verdicts carried over, budget restored). `--resume latest` picks the newest resumable run; `credshrike runs list` shows them all |
 | `--no-cache` / `--refresh` | disable the inventory cache / wipe it before the run |
 | `--cache-ttl-hours H` / `--no-content-cache` | tune the cache window / never cache file bytes |
 
@@ -459,7 +459,7 @@ up to 20 tries, if it is already taken)
 
 | Section | Field | Description |
 |---------|-------|-------------|
-| Preset | Dropdown | full-domain (default) / full / regex-sweep / custom |
+| Preset | Dropdown | domain (default) / host / regex-sweep / custom (old full/full-domain spellings still accepted) |
 | Goal | Textarea | Only visible when preset = custom |
 | Analysis mode | Radio | batch / stream (main form, not advanced) |
 | Snaffler triage | Checkbox | 4-layer read/no-read rules; implies stream |
@@ -479,8 +479,8 @@ up to 20 tries, if it is already taken)
 | Redact literals | Input | Comma-separated |
 | Redact regex | Textarea | One per line |
 | Context limit | Number | Tokens (0 = off) |
-| Computers filter | Input | full-domain: LDAP filter |
-| Max hosts | Number | full-domain: cap (0 = all) |
+| Computers filter | Input | domain: LDAP filter |
+| Max hosts | Number | domain: cap (0 = all) |
 | Debug | Checkbox | Show FULL tool results |
 | Advanced → limits & budgets | Numbers | reads/call, result chars, head size, max files, read budget, tool calls, wall clock, scan caps |
 
@@ -580,7 +580,7 @@ Per-run artifacts:
 
 ```
 runs/
-├── domain_<timestamp>/                    ← full-domain sweep
+├── domain_<timestamp>/                    ← domain sweep
 │   ├── <stamp>_<host>.jsonl              ← per-host audit log
 │   ├── <stamp>_<host>.report.html        ← per-host full report
 │   └── index.html                        ← combined index

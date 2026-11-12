@@ -168,13 +168,16 @@ def _execute_run(state: RunState) -> None:
             state.status = "done"
             return
 
-        # default preset: bare runs (no preset AND no goal) → full-domain sweep
-        effective_preset = params.get("preset") or \
-            ("" if params.get("goal") else "full-domain")
+        # default preset: bare runs (no preset AND no goal) → domain sweep;
+        # normalize old spellings (full/full-domain/snaffler) to canonical
+        from .agent.cli_agent import (DOMAIN_PRESET, HOST_PRESET,
+                                      normalize_preset)
+        effective_preset = normalize_preset(
+            params.get("preset") or ("" if params.get("goal") else DOMAIN_PRESET))
 
-        # 'full' preset with specific host(s) → orchestrator scoped to those hosts
-        # (gets parallel dump + config banner, same as full-domain)
-        if effective_preset == "full" and params.get("host"):
+        # 'host' preset with specific host(s) → orchestrator scoped to those hosts
+        # (gets parallel dump + config banner, same as the domain sweep)
+        if effective_preset == HOST_PRESET and params.get("host"):
             from .agent.orchestrator import run_domain_sweep
             from .domain.base import ComputerRecord
             host_list = [h.strip() for h in params["host"].split(",") if h.strip()]
@@ -199,7 +202,7 @@ def _execute_run(state: RunState) -> None:
             state.status = "done"
             return
 
-        if effective_preset == "full-domain":
+        if effective_preset == DOMAIN_PRESET:
             from .agent.orchestrator import run_domain_sweep
             summary = run_domain_sweep(
                 credential=credential, policy=policy,
