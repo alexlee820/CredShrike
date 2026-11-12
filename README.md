@@ -237,6 +237,46 @@ credshrike agent --preset full --host filesrv01 ... \
 
 ---
 
+## Resume + Inventory Cache
+
+A killed sweep used to lose everything — host progress, per-share results,
+file verdicts, budget spend — and restarting meant re-enumerating the whole
+lab. Two mechanisms fix that:
+
+**Shared inventory cache** (`runs/.cache/inventory.db`, git-ignored): domain
+computer lists, share lists, directory walks and file reads are cached
+across runs, keyed for freshness (size + mtime where the listing provides
+it, TTL otherwise). A re-sweep of the same lab only fetches what changed.
+Permission/ACL probes are never cached. `--no-cache` disables,
+`--refresh` wipes, `--no-content-cache` keeps metadata but not file bytes,
+`--cache-ttl-hours` tunes the window (default 24).
+
+**Run resume** — checkpoint files inside the run directory
+(`run.json` + `state/<host>/<share>.json`):
+
+```bash
+# the sweep died halfway — continue where it left off
+credshrike agent --preset full-domain ... --resume runs/domain_20261112T101010Z
+```
+
+- **Host level**: done hosts are skipped entirely; their persisted findings
+  re-enter the final merge and the regenerated index.
+- **Share level**: shares completed inside a half-swept host are reused
+  verbatim (no dump, no LLM).
+- **File level** (stream mode): the ShareLedger checkpoints after every LLM
+  micro-batch; already-verdicted files are neither re-read nor re-analyzed.
+  No LLM transcript is replayed — the fresh session opens with the ledger
+  digest and coverage is enforced code-side as always.
+- Budget spend (bytes / tool calls / wall clock) is restored, and a resume
+  whose coverage-shaping parameters changed is refused with the exact keys.
+
+The web UI offers the same thing: a **Resume run** dropdown (fed by
+`/api/runs/history`, a disk scan that survives webapp restarts) next to
+Start. Manual `credshrike smb` / `domain` commands share the inventory
+cache too.
+
+---
+
 ## Safety Model (Summary)
 
 | Layer | Mechanism |

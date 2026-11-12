@@ -322,6 +322,16 @@ def main(argv=None) -> int:
     if getattr(args, "socks_proxy", None):
         from .socks_proxy import apply_socks_proxy
         apply_socks_proxy(args.socks_proxy)
+    # ...and share the inventory cache, so repeat one-shot browsing during a
+    # lab session hits cache (agent/ui runs arm their own run-scoped cache)
+    inv_cache = None
+    if args.command in ("smb", "domain"):
+        from .config import Policy
+        from .inventory_cache import InventoryCache
+        from .smb_session import arm_inventory_cache
+        inv_cache = InventoryCache.open("runs", Policy())
+        if inv_cache is not None:
+            arm_inventory_cache(inv_cache)
     try:
         args.func(args)
         return 0
@@ -334,6 +344,11 @@ def main(argv=None) -> int:
     except Exception as exc:  # noqa: BLE001 - CLI boundary
         print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if inv_cache is not None:
+            from .smb_session import disarm_inventory_cache
+            disarm_inventory_cache()
+            inv_cache.close()
 
 
 if __name__ == "__main__":

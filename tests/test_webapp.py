@@ -224,8 +224,13 @@ def test_full_preset_single_host_via_orchestrator(client, monkeypatch):
     from test_agent import FakeSMB
     from credshrike.domain.base import ComputerRecord
     import credshrike.agent.session as session_mod
+    import credshrike.smb_session as smb_mod
     monkeypatch.setattr(session_mod.AgentSession, "smb", lambda self, host: FakeSMB())
     monkeypatch.setattr(orch, "_port_open", lambda host, port=445, timeout=3: True)
+
+    def _no_real_smb(*a, **k):
+        raise ConnectionError("no real SMB sessions in tests")
+    monkeypatch.setattr(smb_mod, "create_smb_session", _no_real_smb)
 
     class Ok:
         def create(self, **kw):

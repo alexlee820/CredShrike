@@ -165,3 +165,11 @@ policy:
   #   socks5h://user:pass@ip:1080 hostname resolved at the proxy
   # CLI: --socks-proxy
   socks_proxy: ""
+  # Shared inventory cache (runs/.cache/inventory.db): domain computers,
+  # share lists, directory walks and file reads survive across runs — re-
+  # sweeps only fetch what changed, interrupted runs resume without re-
+  # enumerating. Git-ignored: it contains lab file paths + content.
+  # CLI: --no-cache / --refresh / --cache-ttl-hours / --no-content-cache
+  inventory_cache: true
+  cache_ttl_hours: 24        # freshness for listings; reads also check size+mtime
+  cache_content: true        # false = cache metadata, never file contents""

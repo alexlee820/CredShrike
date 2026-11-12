@@ -13,10 +13,11 @@
    - [Policy YAML](#policy-yaml)
    - [CLI Flags](#cli-flags)
    - [Web UI Settings](#web-ui-settings)
-5. [Authentication](#authentication)
-6. [Context Window Management](#context-window-management)
-7. [Findings Extraction Pipeline](#findings-extraction-pipeline)
-8. [Report Output](#report-output)
+5. [Resume & Inventory Cache](#resume--inventory-cache)
+6. [Authentication](#authentication)
+7. [Context Window Management](#context-window-management)
+8. [Findings Extraction Pipeline](#findings-extraction-pipeline)
+9. [Report Output](#report-output)
 
 ---
 
@@ -322,6 +323,9 @@ as a starting point.
 | `stream` | true | SSE token streaming (auto-falls back if the endpoint rejects it) |
 | `prompt_cache` | true | `cache_control` on system+tools and the rolling last message; auto-disabled if unsupported |
 | `socks_proxy` | "" | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos **only** — LLM API calls stay direct (unlike proxychains, which tunnels the whole process). `socks5://` (local DNS) / `socks5h://` (DNS at the proxy) / `socks4://` / `http://`, optional `user:pass@`. Patched modules: `impacket.nmb`, `impacket.ldap.ldap`, `impacket.krb5.kerberosv5`, the vendored ADWS client, the reachability probe |
+| `inventory_cache` | true | Shared inventory cache at `<audit_dir>/.cache/inventory.db` (git-ignored): computers/shares/listings/reads cached across runs; `false` = complete bypass |
+| `cache_ttl_hours` | 24 | Freshness window for listings + metadata-less reads; content rows also validate size + mtime against the parent listing |
+| `cache_content` | true | `false` = cache metadata but never file contents (`--no-content-cache`) |
 
 #### Privacy masking (PasteGuard-style)
 
@@ -434,6 +438,9 @@ as a starting point.
 | `--mask-email-domain` | Surrogate email domain (default `corp.local`) |
 | `--mask-netbios-domain` | Surrogate NetBIOS domain (default `corp`) |
 | `--socks-proxy` | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos only — LLM direct (`socks5h://` = DNS at the proxy); shared across smb/domain/agent subcommands |
+| `--resume RUN_DIR` | full-domain only: continue an interrupted run (done hosts/shares skipped, stream file verdicts carried over, budget restored) |
+| `--no-cache` / `--refresh` | disable the inventory cache / wipe it before the run |
+| `--cache-ttl-hours H` / `--no-content-cache` | tune the cache window / never cache file bytes |
 
 #### REPL commands
 
@@ -479,6 +486,26 @@ up to 20 tries, if it is already taken)
 
 While a run is live the page is a monitor: the event feed splits into
 **All / Walking / SMB / AI-thread** tabs with per-share filter chips.
+
+---
+
+## Resume & Inventory Cache
+
+- Cache db: `<audit_dir>/.cache/inventory.db` (SQLite, WAL) — one serialized
+  connection + per-key single-flight; `CachedSMBSession` wraps only
+  `list_shares` / `list_dir` / `read_file` (permission probes stay live);
+  reads use range-cover semantics (a cached row serves any request it
+  covers; EOF rows serve past-EOF requests as short slices).
+- Per-run state: `runs/domain_<stamp>/run.json` (fingerprint over dc, source,
+  filter, max_hosts + coverage-shaping policy keys; host statuses; budget
+  spend; the resolved computer list so resume never re-queries AD) and
+  `state/<host>/<share>.json` (result + in-progress ledger; restored
+  findings only — credentials never stored). All git-ignored.
+- Resume granularity: host → share → file (stream mode). No LLM transcript
+  replay: the fresh session opens with `ledger.digest()`, `_on_file` drops
+  already-verdicted files, and Part 1 of the report is generated from the
+  ledger as always.
+- Web: `/api/runs/history` (disk scan) + the form's Resume run dropdown.
 
 ---
 
