@@ -153,74 +153,6 @@
         <input id="apiBaseUrl" placeholder="https://api.deepseek.com/anthropic"/></div>
       <div class="field"><label>API key (optional — else ANTHROPIC_API_KEY)</label>
         <input id="apiKey" type="password" placeholder="sk-..."/></div>
-      <div class="field"><label>SOCKS proxy (optional — SMB/LDAP/ADWS only, LLM direct)</label>
-        <input id="socksProxy" placeholder="socks5h://127.0.0.1:1080"/></div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="streamMode" style="width:auto" checked/>
-        <label style="margin:0" for="streamMode">Stream tokens (SSE) — live output;
-          auto-fallback to a plain request if the endpoint rejects it</label>
-      </div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="promptCache" style="width:auto" checked/>
-        <label style="margin:0" for="promptCache">Prompt caching (cache_control) —
-          reuse provider-side prefill for identical prefixes; transparent, and
-          auto-disabled if the endpoint rejects it</label>
-      </div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="debugMode" style="width:auto"/>
-        <label style="margin:0" for="debugMode">Debug — show FULL tool results
-          (verify adws/ldap via "source", inspect dump pages)</label>
-      </div>
-      <div class="field"><label>Analysis mode</label>
-        <select id="analysisMode">
-          <option value="batch" selected>batch — dump then analyze (auto-split)</option>
-          <option value="stream">stream — walk + one LLM thread per share (pipelined)</option>
-        </select></div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="analysisTriage" style="width:auto"/>
-        <label style="margin:0" for="analysisTriage">Snaffler triage — decide which files
-          the LLM reads (junk discarded, artifacts reported unread, relay → LLM).
-          Implies stream mode</label>
-      </div>
-      <div class="field"><label>Concurrent LLM requests (stream)</label>
-        <input id="maxConcurrentLlm" type="number" placeholder="2"/></div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="maskPii" style="width:auto" checked/>
-        <label style="margin:0" for="maskPii">Mask PII before sending to the LLM
-          — emails, usernames, IPs, phones, cards, IBANs, VAT</label>
-      </div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="maskSecrets" style="width:auto" checked/>
-        <label style="margin:0" for="maskSecrets">Mask secrets before sending to the LLM
-          — API keys, JWTs, private keys, passwords (restored in the report)</label>
-      </div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="maskSemantic" style="width:auto"/>
-        <label style="margin:0" for="maskSemantic">Semantic PII (GLiNER) —
-          names &amp; addresses too; needs <code>pip install gliner</code>,
-          downloads the model on first use (slow)</label>
-      </div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="useSurrogates" style="width:auto" checked/>
-        <label style="margin:0" for="useSurrogates">Same-length pseudonyms for names &amp;
-          passwords (e.g. <code>Amber Scott</code>, <code>Xkqmbn7314#</code>) instead
-          of visible placeholders — restored in the report</label>
-      </div>
-      <div class="field"><label>Pseudonym style</label>
-        <select id="surrogateStyle">
-          <option value="name" selected>name — real-looking names (initials kept)</option>
-          <option value="syllable">syllable — pronounceable filler</option>
-          <option value="masked">masked — Xxxx / 0000</option>
-        </select></div>
-      <div class="field"><label>Masked email domain</label>
-        <input id="emailDomain" value="corp.local"/></div>
-      <div class="field"><label>Masked NetBIOS domain (DOMAIN\user)</label>
-        <input id="netbiosDomain" value="corp"/></div>
-      <div class="field" style="flex-direction:row;align-items:center;gap:8px">
-        <input type="checkbox" id="noMaskRestore" style="width:auto"/>
-        <label style="margin:0" for="noMaskRestore">Do NOT restore masked values in the
-          output (maximum privacy — placeholders stay in the report)</label>
-      </div>
     </div>
 
     <div id="authFields">
@@ -239,10 +171,88 @@
       </div>
     </div>
 
-    <hr/>
     <details>
-      <summary>read gate &amp; redaction</summary>
+      <summary>analysis &amp; LLM — defaults: stream + Snaffler triage, 4 concurrent (open to change)</summary>
+      <div class="grid2">
+        <div class="field"><label>Analysis mode</label>
+          <select id="analysisMode">
+            <option value="stream" selected>stream — walk + one LLM thread per share (pipelined, default)</option>
+            <option value="batch">batch — dump then analyze (auto-split)</option>
+          </select></div>
+        <div class="field"><label>Concurrent LLM requests (stream)</label>
+          <input id="maxConcurrentLlm" type="number" placeholder="4"/></div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="analysisTriage" style="width:auto" checked/>
+          <label style="margin:0" for="analysisTriage">Snaffler triage — decide which files
+            the LLM reads (junk discarded, artifacts reported unread, relay → LLM).
+            Implies stream mode</label>
+        </div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="streamMode" style="width:auto" checked/>
+          <label style="margin:0" for="streamMode">Stream tokens (SSE) — live output;
+            auto-fallback to a plain request if the endpoint rejects it</label>
+        </div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="promptCache" style="width:auto" checked/>
+          <label style="margin:0" for="promptCache">Prompt caching (cache_control) —
+            reuse provider-side prefill for identical prefixes; transparent, and
+            auto-disabled if the endpoint rejects it</label>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>privacy masking (PasteGuard) — PII &amp; secrets masked by default (open to change)</summary>
+      <div class="grid2">
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="maskPii" style="width:auto" checked/>
+          <label style="margin:0" for="maskPii">Mask PII before sending to the LLM
+            — emails, usernames, IPs, phones, cards, IBANs, VAT</label>
+        </div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="maskSecrets" style="width:auto" checked/>
+          <label style="margin:0" for="maskSecrets">Mask secrets before sending to the LLM
+            — API keys, JWTs, private keys, passwords (restored in the report)</label>
+        </div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="maskSemantic" style="width:auto"/>
+          <label style="margin:0" for="maskSemantic">Semantic PII (GLiNER) —
+            names &amp; addresses too; needs <code>pip install gliner</code>,
+            downloads the model on first use (slow)</label>
+        </div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="useSurrogates" style="width:auto" checked/>
+          <label style="margin:0" for="useSurrogates">Same-length pseudonyms for names &amp;
+            passwords (e.g. <code>Amber Scott</code>, <code>Xkqmbn7314#</code>) instead
+            of visible placeholders — restored in the report</label>
+        </div>
+        <div class="field"><label>Pseudonym style</label>
+          <select id="surrogateStyle">
+            <option value="name" selected>name — real-looking names (initials kept)</option>
+            <option value="syllable">syllable — pronounceable filler</option>
+            <option value="masked">masked — Xxxx / 0000</option>
+          </select></div>
+        <div class="field"><label>Masked email domain</label>
+          <input id="emailDomain" value="corp.local"/></div>
+        <div class="field"><label>Masked NetBIOS domain (DOMAIN\user)</label>
+          <input id="netbiosDomain" value="corp"/></div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="noMaskRestore" style="width:auto"/>
+          <label style="margin:0" for="noMaskRestore">Do NOT restore masked values in the
+            output (maximum privacy — placeholders stay in the report)</label>
+        </div>
+      </div>
+    </details>
+    <details>
+      <summary>advanced — read gate, redaction, proxy &amp; debug</summary>
       <div class="grid2" style="margin-top:10px">
+        <div class="field"><label>SOCKS proxy (optional — SMB/LDAP/ADWS only, LLM direct)</label>
+          <input id="socksProxy" placeholder="socks5h://127.0.0.1:1080"/></div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="debugMode" style="width:auto"/>
+          <label style="margin:0" for="debugMode">Debug — show FULL tool results
+            (verify adws/ldap via "source", inspect dump pages)</label>
+        </div>
         <div class="field"><label>Read gate</label>
           <select id="readGate"><option value="">policy default</option>
             <option value="none">none</option><option value="ai">ai (token est.)</option>
