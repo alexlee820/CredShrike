@@ -309,9 +309,11 @@ def _cmd_agent_dispatch(args, credential, policy, concurrency, preset) -> None:
         # config banner already printed at the top of cmd_agent
         hosts = [h.strip() for h in (args.host or "").split(",") if h.strip()]
         if not hosts:
-            print("[error] --preset full requires --host <hostname>")
+            print("[error] --preset host requires --host <hostname>[,...]")
             return
 
+        from .audit import AuditLog
+        from .session import AgentSession
         audit_dir = args.audit_dir
         for host in hosts:
             print(f"\n[agent] ── {host} ──")

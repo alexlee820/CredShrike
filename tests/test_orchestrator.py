@@ -333,3 +333,25 @@ def test_focus_injected_into_batch_and_defaults_flipped(tmp_path, fake_smb):
     goals_text = str(factory.state["goals"])
     assert "OPERATOR FOCUS" in goals_text
     assert "only password-type credentials" in goals_text
+
+
+def test_cmd_agent_host_preset_runs_end_to_end(tmp_path, fake_smb, monkeypatch):
+    """Drive the REAL CLI entry (cmd_agent --preset host) — the branch that
+    silently broke with NameError: AuditLog because no test ran the CLI path
+    (everything exercised run_domain_sweep directly)."""
+    from credshrike.agent import cli_agent
+    from credshrike.cli import build_parser
+
+    args = build_parser().parse_args([
+        "agent", "--preset", "host", "--host", "ws01.corp.local",
+        "--user", "svc", "--domain", "corp.local", "--password", "pw",
+        "--api-base-url", "http://fake", "--api-key", "k",
+        "--analysis-mode", "batch", "--no-analysis-triage",
+        "--audit-dir", str(tmp_path)])
+    monkeypatch.setattr(cli_agent, "_make_client",
+                        lambda policy=None: _client_factory_for_hosts({})())
+    cli_agent.cmd_agent(args)
+
+    # the host loop completed: audit log + report landed in the audit dir
+    assert list(tmp_path.glob("*.jsonl")), "no audit log written"
+    assert list(tmp_path.glob("*.report.html")), "no report written"
