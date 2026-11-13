@@ -235,3 +235,34 @@ def test_safe_rejects_overlap_with_real_values_but_allows_email_local():
     # the bare username inside that account's masked email is fine
     assert SurrogateFactory._safe("jones", "jchen", "",
                                   {"jones@corp.local": "jchen@real"}) is True
+
+
+def test_same_account_one_surrogate_across_all_forms():
+    r"""Alignment: bare name, DOMAIN\user, email local part and profile path
+    are the SAME account and must all derive from ONE canonical surrogate —
+    otherwise the model cannot correlate them."""
+    f = SurrogateFactory(min_len=4)
+    bare = f.make("jchen", "USERNAME", "", {})
+    dom = f.make("HACKADAY" + chr(92) + "jchen", "USERNAME", "", {})
+    email = f.make("jchen@hackaday.lab", "EMAIL_ADDRESS", "", {})
+    assert bare and dom and email
+    assert dom == "corp" + chr(92) + bare          # netbios form reuses it
+    assert email == f"{bare}@corp.local"           # email local part reuses it
+    assert f.make("jchen", "USERNAME", "", {}) == bare   # stable
+    assert f.make("JCHEN", "USERNAME", "", {}) == bare   # case-insensitive
+
+
+def test_username_map_is_write_once_no_silent_remap():
+    """Regression: a later file containing the surrogate literally used to
+    SILENTLY re-map the account to a second name (kford here, mmiles there) —
+    same human, two identities. The canonical map must never be rewritten;
+    the colliding occurrence falls back to a placeholder."""
+    f = SurrogateFactory(rng=random.Random(1), min_len=4)
+    first = f.make("jchen", "USERNAME", "username: jchen", {})
+    assert first
+    # a text that already contains the surrogate literally -> unsafe here
+    second = f.make("jchen", "USERNAME", f"note about {first} the contractor", {})
+    assert second is None                  # placeholder for THIS occurrence
+    # and the canonical mapping is untouched for every other file
+    third = f.make("jchen", "USERNAME", "another file mentioning jchen", {})
+    assert third == first

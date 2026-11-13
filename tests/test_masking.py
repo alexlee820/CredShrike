@@ -424,3 +424,59 @@ def test_materialize_model_uses_local_dir_and_caches(monkeypatch, tmp_path):
     second = sem.materialize_model("urchade/gliner_multi_pii-v1")
     assert first == second == str(target)
     assert calls == [("urchade/gliner_multi_pii-v1", str(target))]   # cached
+
+
+def test_shared_factory_aligns_same_account_across_contexts():
+    """Cross-share/cross-batch alignment: separate Maskers (one placeholder
+    namespace per context) built on ONE shared factory must map the same
+    account to the same surrogate everywhere, in every form."""
+    from credshrike.masking import build_surrogate_factory
+
+    policy = Policy()
+    policy.mask_pii = True
+    policy.mask_secrets = True
+    factory = build_surrogate_factory(policy)
+
+    share_a = Masker.from_policy(policy, shared_factory=factory)
+    share_b = Masker.from_policy(policy, shared_factory=factory)
+    text_a = "username: jchen\nHACKADAY" + chr(92) + "jchen admin\n"
+    text_b = "owner jchen@hackaday.lab\nC:" + chr(92) + "Users" + chr(92) + "jchen" + chr(92) + "k\n"
+    masked_a, _ = share_a.mask_text(text_a)
+    masked_b, _ = share_b.mask_text(text_b)
+
+    # extract the surrogate local part from each masked form
+    import re
+    names = set(re.findall(r"([A-Za-z][A-Za-z0-9._-]{3,})", masked_a + " " + masked_b))
+    allowed = {"hackaday", "admin", "username", "users", "owner",
+               "corp", "local", "corp.local"}
+    surrogates = {n for n in names
+                  if n.lower() not in allowed and n.lower() != "jchen"}
+    # every occurrence across BOTH contexts uses ONE canonical surrogate
+    assert len(surrogates) == 1, surrogates
+
+    # restore still returns the real account in each context
+    assert "jchen" in share_a.restore(masked_a)
+    assert "jchen" in share_b.restore(masked_b)
+
+
+def test_shared_factory_is_thread_safe():
+    import threading
+    from credshrike.surrogate import SurrogateFactory
+
+    f = SurrogateFactory(min_len=4)
+    results = []
+    errors = []
+
+    def worker(i):
+        try:
+            results.append(f.make(f"svc{i:02d}", "USERNAME", "", {}))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert len(set(results)) == 12      # distinct accounts, distinct names

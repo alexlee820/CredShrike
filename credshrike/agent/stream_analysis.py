@@ -266,6 +266,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
                             memory_block: str = "",
                             use_triage: Optional[bool] = None,
                             focus: str = "",
+                            mask_factory=None,
                             resume: Optional[dict] = None,
                             state_sink: Optional[Callable] = None) -> dict:
     """Same result contract as _analyze_share_batches:
@@ -290,7 +291,7 @@ def analyze_share_streaming(*, credential: Credential, policy: Policy, audit,
     k = max(1, int(getattr(policy, "analysis_group_files", 10)))
     wait_s = max(0.05, int(getattr(policy, "analysis_group_wait_ms", 2000)) / 1000)
     per_file = policy.dump_per_file_bytes
-    masker = Masker.from_policy(policy)
+    masker = Masker.from_policy(policy, shared_factory=mask_factory)
     ledger = ShareLedger(share_name)
     if resume:
         # continue an interrupted share: restore coverage state (NOT the

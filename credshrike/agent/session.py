@@ -65,6 +65,7 @@ class Budget:
 
 class AgentSession:
     def __init__(self, credential: Credential, policy: Policy, audit: AuditLog,
+                 mask_factory=None,
                  hosts: Optional[list[str]] = None, dc: str = "",
                  domain_source: str = "auto"):
         self.credential = credential
@@ -85,7 +86,8 @@ class AgentSession:
         # PasteGuard-style privacy masking: None when disabled. One Masker per
         # session = one placeholder namespace per context window.
         from ..masking import Masker
-        self.masker = Masker.from_policy(policy)
+        self.masker = Masker.from_policy(policy,
+                                         shared_factory=mask_factory)
         self.masked_values = 0
         # full results of every smb_scan_share sweep (for the HTML report)
         self.scan_results: list[dict] = []

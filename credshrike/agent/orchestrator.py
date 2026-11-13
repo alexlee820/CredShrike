@@ -488,12 +488,16 @@ def _analyze_share_batches(credential: Credential, policy: Policy, audit,
              f"context budget {max_chars // 1000}K — auto-split into "
              f"{len(batches)} request(s) ({[len(b) for b in batches]} files)")
 
+    from ..masking import build_surrogate_factory
+    mask_factory = build_surrogate_factory(policy)
     masked_total = 0
     masked_entities: dict[str, int] = {}
     for i, batch in enumerate(batches, 1):
         # one fresh session per batch = one placeholder namespace per request
+        # (the shared factory keeps account surrogates aligned across batches)
         share_session = AgentSession(credential, policy, audit, hosts=[host],
-                                     dc=dc, domain_source=domain_source)
+                                     dc=dc, domain_source=domain_source,
+                                     mask_factory=mask_factory)
         masker = share_session.masker
 
         batch_note = (f"\nBATCH {i} OF {len(batches)}: this request contains "
@@ -879,6 +883,10 @@ def _sweep_one_host(entry: dict, host: str, run_dir: str, credential: Credential
 def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
                            dumpable, session, audit, client_factory, echo, emit,
                            computers=None, state_store=None, focus: str = ""):
+    # ONE surrogate factory per host: shares analyzed concurrently still map
+    # the same account to the same name (placeholder namespaces stay per share)
+    from ..masking import build_surrogate_factory
+    mask_factory = build_surrogate_factory(policy)
     """stream mode: shares pipelined (each = walkers + one LLM thread),
     bounded by max_shares_in_flight and a global LLM request semaphore."""
     from concurrent.futures import ThreadPoolExecutor
@@ -921,6 +929,7 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
             memory_block=f"({si}/{len(dumpable)}) ",
             use_triage=bool(getattr(policy, "analysis_triage", False)),
             focus=focus,
+            mask_factory=mask_factory,
             resume=resume_ledger,
             state_sink=(lambda snap: state_store.save(host, share_name, snap))
             if state_store is not None else None)

@@ -383,6 +383,27 @@ class MaskContext:
 # --------------------------------------------------------------------------- #
 # masker
 # --------------------------------------------------------------------------- #
+def build_surrogate_factory(policy) -> "Optional[SurrogateFactory]":
+    """Policy -> SurrogateFactory (None when same-length surrogates are off).
+
+    A run shares ONE factory across shares/batches so the same account name
+    always maps to the same surrogate (alignment for correlation), while
+    each context keeps its own placeholder namespace."""
+    same_length = getattr(policy, "mask_same_length", None)
+    if same_length is None:
+        same_length = ["PERSON", "ENV_PASSWORD", "USERNAME", "EMAIL_ADDRESS"]
+    if not same_length:
+        return None
+    from .surrogate import SurrogateFactory
+    return SurrogateFactory(
+        style=str(getattr(policy, "mask_surrogate_style", "name")),
+        keep_initials=bool(getattr(policy, "mask_surrogate_keep_initials", True)),
+        min_len=int(getattr(policy, "mask_surrogate_min_len", 4)),
+        email_domain=str(getattr(policy, "mask_email_domain", "corp.local")),
+        netbios_domain=str(getattr(policy, "mask_netbios_domain", "corp")),
+    )
+
+
 class Masker:
     """Detect -> placeholder -> restore. One Masker per context window."""
 
@@ -430,7 +451,7 @@ class Masker:
         return self.surrogate_factory.make
 
     @classmethod
-    def from_policy(cls, policy) -> Optional["Masker"]:
+    def from_policy(cls, policy, shared_factory=None) -> Optional["Masker"]:
         """Build the session masker, or None when masking is disabled.
         The semantic (GLiNER) backend is loaded EAGERLY when configured so a
         missing package/model fails before any SMB traffic starts."""
@@ -453,17 +474,7 @@ class Masker:
         same_length = getattr(policy, "mask_same_length", None)
         if same_length is None:
             same_length = ["PERSON", "ENV_PASSWORD", "USERNAME", "EMAIL_ADDRESS"]
-        surrogate_factory = None
-        if same_length:
-            from .surrogate import SurrogateFactory
-            surrogate_factory = SurrogateFactory(
-                style=str(getattr(policy, "mask_surrogate_style", "name")),
-                keep_initials=bool(getattr(policy,
-                                           "mask_surrogate_keep_initials", True)),
-                min_len=int(getattr(policy, "mask_surrogate_min_len", 4)),
-                email_domain=str(getattr(policy, "mask_email_domain", "corp.local")),
-                netbios_domain=str(getattr(policy, "mask_netbios_domain", "corp")),
-            )
+        surrogate_factory = shared_factory or build_surrogate_factory(policy)
         return cls(
             pii=pii, secrets=secrets,
             max_scan_chars=int(getattr(policy, "mask_max_scan_chars", 200_000)),

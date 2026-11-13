@@ -26,6 +26,7 @@ Safety rules for every candidate:
 from __future__ import annotations
 
 import random
+import threading
 import re
 import string
 from typing import Iterable, Optional
@@ -308,6 +309,7 @@ class SurrogateFactory:
         self.email_domain = email_domain or "corp.local"
         self.netbios_domain = netbios_domain or "corp"
         self._username_map: dict[str, str] = {}
+        self._lock = threading.RLock()   # shared across concurrent shares
 
     def handles(self, entity: str) -> bool:
         entity = (entity or "").upper()
@@ -330,7 +332,15 @@ class SurrogateFactory:
 
     def make(self, value: str, entity: str, text: str,
              existing: Optional[dict] = None) -> Optional[str]:
-        """Return a safe surrogate, or None to use a placeholder."""
+        """Return a safe surrogate, or None to use a placeholder.
+
+        Thread-safe: a run shares ONE factory across concurrently analyzed
+        shares so the same account always maps to the same surrogate."""
+        with self._lock:
+            return self._make(value, entity, text, existing)
+
+    def _make(self, value: str, entity: str, text: str,
+              existing: Optional[dict] = None) -> Optional[str]:
         entity = (entity or "").upper()
         if not value or not self.handles(entity):
             return None

@@ -144,20 +144,30 @@ stays fixed. Only the `custom` preset treats the goal as the task itself.
 credshrike agent --host FILE01.hackaday.lab ... --preset host
 ```
 
-### Streaming Analysis (default)
+### Streaming Analysis + Snaffler Triage (default)
 
-`--analysis-mode stream` pipelines each share (add `--analysis-triage` to
-let Snaffler's 4-layer read/no-read rules decide which files reach the LLM:
-junk discarded, artifacts reported unread, relay files streamed — detection
-stays 100% LLM): directory walkers push file
-paths into a queue while a single per-share LLM thread reads the files itself
-and sends micro-batches (default 10 files/request). Every file must produce a
-checklist verdict in a code-side ledger — Part 1 of the report is generated
-from it, so coverage is enforced without a second LLM pass. Sessions reset
-near the context limit (ledger carried over), shares run up to
-`max_shares_in_flight` in parallel under a global `max_concurrent_llm`
+The default experience pipelines each share: directory walkers push file
+paths into a queue while a single per-share LLM thread reads the files
+itself and sends micro-batches (default 10 files/request). Every file must
+produce a checklist verdict in a code-side ledger — Part 1 of the report is
+generated from it, so coverage is enforced without a second LLM pass.
+Sessions reset near the context limit (ledger carried over), shares run up
+to `max_shares_in_flight` in parallel under a global `max_concurrent_llm`
 semaphore, and the web UI monitor gets separate Walking/AI-thread tabs with
-share filter chips. Stream + Snaffler triage is the default; `--analysis-mode batch` restores the dump-then-analyze flow.
+share filter chips.
+
+**Snaffler triage** (ported read/no-read rules, on by default —
+`--no-analysis-triage` to disable) decides which files are worth LLM time
+BEFORE any spend. Detection stays 100% LLM; the rules only route:
+
+| Layer | What happens | Examples |
+|-------|--------------|----------|
+| 1 · DISCARD | skipped, listed under **Known FPs** | 27 junk extensions (.avi .dll .exe…), `sceregvl.inf` |
+| 2 · ARTIFACT | reported unread, severity-tiered under **Report-only files** | black: .kdbx lsass `ntds.dit` id_rsa; red: .ppk customsettings.ini `.git-credentials`; yellow: .mdf .pcap .ovpn |
+| 3 · RELAY | opened + streamed to the LLM | ~19 config/script/cert groups: .inf .ps1 .config .xml .json .yml .sql .py .php .js .pem .key .rdp … |
+| 4 · GREEN | wide-net fallback: opened if it fits | anything else readable |
+
+`--analysis-mode batch` restores the dump-then-analyze flow.
 
 ```bash
 credshrike agent --preset domain --dc dc01 --user svc --password '...'   --analysis-mode stream --max-concurrent-llm 4
