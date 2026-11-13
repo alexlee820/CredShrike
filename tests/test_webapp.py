@@ -524,3 +524,23 @@ def test_web_resume_run(client, monkeypatch, tmp_path):
     assert "SamePass1" in index and "Pass9" in index
     # the persisted host was never re-analyzed
     assert "ws01" not in str(factory.state["goals"])
+
+
+def test_ui_script_parses(tmp_path):
+    """The inline <script> must PARSE — one unterminated regex literal
+    (heredoc-mangled escape) once killed every button on the page with
+    'Uncaught SyntaxError: missing /'. node --check gives us real syntax
+    validation instead of just asserting element ids exist."""
+    import re
+    import subprocess
+    from credshrike.webapp import app
+    html = app.test_client().get("/").get_data(as_text=True)
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert scripts, "no inline script found"
+    for i, script in enumerate(scripts):
+        js = tmp_path / f"ui_{i}.js"
+        js.write_text(script, encoding="utf-8")
+        result = subprocess.run(["node", "--check", str(js)],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, \
+            f"script #{i} does not parse: {result.stderr[:400]}"

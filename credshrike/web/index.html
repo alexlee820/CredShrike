@@ -381,10 +381,12 @@ async function loadResumeRuns() {
     const sel = $('resumeRun');
     const pick = sel.value;
     sel.innerHTML = '<option value="">— new run —</option>' +
-      (data.runs || []).filter(r => r.resumable).map(r =>
-        `<option value="${r.run_dir}">${r.run_dir.split(/[\/]).pop()} — ` +
-        `${r.hosts_done}/${r.hosts_total} hosts, ${r.shares_done} share(s) checkpointed</option>`
-      ).join('');
+      (data.runs || []).filter(r => r.resumable).map(r => {
+        const parts = r.run_dir.split('\\').join('/').split('/');
+        const name = parts[parts.length - 1];
+        return `<option value="${r.run_dir}">${name} — ` +
+               `${r.hosts_done}/${r.hosts_total} hosts, ${r.shares_done} share(s) checkpointed</option>`;
+      }).join('');
     if (pick) sel.value = pick;
   } catch (e) { /* history is best-effort */ }
 }
