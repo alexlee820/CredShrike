@@ -437,15 +437,21 @@ class ImpacketTransport(SMBSession, EnumerationTransport):
 
 
 # --------------------------------------------------------------------------- #
-# session factory (inventory cache hook)
+# session factory (transport + inventory cache hooks)
 # --------------------------------------------------------------------------- #
-# The shared inventory cache is armed process-wide for the duration of a run;
-# unarmed (the default, and every existing test) the factory is byte-for-byte
-# a plain SMBSession. Consumers import create_smb_session FUNCTION-LOCALLY
-# and the plain path references the module-global SMBSession name, so the
-# established test trick — monkeypatch.setattr(smb_mod, "SMBSession", fake) —
-# keeps intercepting construction. Arming is a STACK so nested scopes
-# (cmd_agent arming, then run_domain_sweep arming) unwind cleanly.
+# Two run-scoped hooks, both stacks:
+#   * transport provider — armed by cs_transport.arm_cs_transport(); the
+#     factory asks it FIRST, so every creation site (pools, stream worker,
+#     AgentSession.smb) transparently gets a CobaltStrikeTransport when
+#     transport=cs-mcp. CS transports intentionally bypass the inventory
+#     cache wrapper for now (its keys assume impacket result shapes).
+#   * inventory cache — as before.
+# Unarmed (the default, and every existing test) the factory is
+# byte-for-byte an ImpacketTransport. Consumers import create_smb_session
+# FUNCTION-LOCALLY and the plain path references module-global names, so
+# the established test trick — monkeypatch.setattr(smb_mod, "SMBSession",
+# fake) — keeps intercepting construction.
+_TRANSPORT_STACK: list = []
 _ACTIVE_CACHE = []
 
 
@@ -463,8 +469,34 @@ def active_inventory_cache():
     return _ACTIVE_CACHE[-1] if _ACTIVE_CACHE else None
 
 
+def arm_transport(provider, closer=None) -> None:
+    """Make create_smb_session build transports from ``provider(host)``.
+
+    The provider returns an EnumerationTransport; ``closer`` (if given) is
+    called on disarm so the backend can tear down its connections."""
+    _TRANSPORT_STACK.append((provider, closer))
+
+
+def disarm_transport() -> None:
+    """Pop the innermost transport provider, closing its backend."""
+    if _TRANSPORT_STACK:
+        _provider, closer = _TRANSPORT_STACK.pop()
+        if closer is not None:
+            try:
+                closer()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def active_transport_provider():
+    return _TRANSPORT_STACK[-1][0] if _TRANSPORT_STACK else None
+
+
 def create_smb_session(credential, host, port: int = 445, timeout: int = 30,
                        resolver=None) -> "SMBSession":
+    provider = active_transport_provider()
+    if provider is not None:
+        return provider(host)      # e.g. CobaltStrikeTransport (armed)
     cache = active_inventory_cache()
     if cache is not None:
         from .inventory_cache import CachedSMBSession   # lazy: no import cycle

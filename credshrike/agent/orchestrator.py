@@ -1103,6 +1103,11 @@ def _print_config_banner(credential: Credential, policy: Policy, dc: str,
     echo(f" Model      : {policy.model} @ {policy.api_base_url or 'api.anthropic.com'}")
     if getattr(policy, "socks_proxy", ""):
         echo(f" SOCKS      : {policy.socks_proxy} (SMB/LDAP/ADWS only — LLM direct)")
+    if getattr(policy, "transport", "impacket") == "cs-mcp":
+        echo(f" Transport  : Cobalt Strike via official MCP "
+             f"({getattr(policy, 'cs_mcp_url', '')}, beacon "
+             f"{getattr(policy, 'cs_beacon', '') or 'auto'}) — read-only "
+             f"ls/net view/download through the beacon")
     if getattr(policy, "inventory_cache", True):
         echo(f" Cache      : <audit_dir>/.cache/inventory.db "
              f"(ttl {getattr(policy, 'cache_ttl_hours', 24)}h, "

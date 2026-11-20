@@ -137,6 +137,15 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     # socks5:// (local DNS) / socks5h:// (DNS at the proxy) / socks4:// /
     # http://[CONNECT], optional user:pass@. Empty = direct connection.
     "socks_proxy": "",
+    # Enumeration transport: impacket (direct SMB sockets, default) or
+    # cs-mcp (through a Cobalt Strike beacon via the official CS MCP
+    # server — read-only ls/net view/download templates, beacon-side
+    # context, localhost capable). cs-mcp requires cs_mcp_url.
+    "transport": "impacket",
+    "cs_mcp_url": "",          # e.g. http://teamserver:50051 (official server)
+    "cs_mcp_token": "",        # bearer token for the official server
+    "cs_beacon": "",           # explicit beacon id; empty/auto = first beacon
+    "cs_deadline_minutes": 30, # per-execution deadline (beacon check-in wait)
     # Shared inventory cache (runs/.cache/inventory.db): domain computers,
     # share lists, directory listings and file reads survive across runs —
     # re-sweeps only fetch what changed, and interrupted runs resume without
@@ -222,6 +231,11 @@ class Policy:
     stream: bool = DEFAULT_POLICY_DICT["stream"]
     prompt_cache: bool = DEFAULT_POLICY_DICT["prompt_cache"]
     socks_proxy: str = DEFAULT_POLICY_DICT["socks_proxy"]
+    transport: str = DEFAULT_POLICY_DICT["transport"]
+    cs_mcp_url: str = DEFAULT_POLICY_DICT["cs_mcp_url"]
+    cs_mcp_token: str = DEFAULT_POLICY_DICT["cs_mcp_token"]
+    cs_beacon: str = DEFAULT_POLICY_DICT["cs_beacon"]
+    cs_deadline_minutes: float = DEFAULT_POLICY_DICT["cs_deadline_minutes"]
     inventory_cache: bool = DEFAULT_POLICY_DICT["inventory_cache"]
     cache_ttl_hours: float = DEFAULT_POLICY_DICT["cache_ttl_hours"]
     cache_content: bool = DEFAULT_POLICY_DICT["cache_content"]
