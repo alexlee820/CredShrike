@@ -64,12 +64,13 @@ def cache(tmp_path):
 @pytest.fixture()
 def patched(counter, monkeypatch):
     """Route CachedSMBSession's super() calls to the counting fake."""
-    monkeypatch.setattr(ic.SMBSession, "list_shares",
+    import credshrike.smb_session as smb_mod
+    monkeypatch.setattr(smb_mod.SMBSession, "list_shares",
                         lambda self: counter.list_shares())
-    monkeypatch.setattr(ic.SMBSession, "list_dir",
+    monkeypatch.setattr(smb_mod.SMBSession, "list_dir",
                         lambda self, share, path="", max_entries=500:
                         counter.list_dir(share, path, max_entries))
-    monkeypatch.setattr(ic.SMBSession, "read_file",
+    monkeypatch.setattr(smb_mod.SMBSession, "read_file",
                         lambda self, share, path, offset=0, max_bytes=262144:
                         counter.read_file(share, path, offset, max_bytes))
 
@@ -250,9 +251,10 @@ def test_concurrent_reads_single_flight(cache, patched, counter):
 def test_factory_arm_and_disarm(monkeypatch):
     import credshrike.smb_session as ss
     calls = []
-    monkeypatch.setattr(ss, "SMBSession",
+    monkeypatch.setattr(ss, "ImpacketTransport",
                         lambda *a, **k: calls.append("plain"))
-    # unarmed → plain session (module-global name lookup keeps test patches alive)
+    # unarmed → impacket transport (module-global name lookup keeps test
+    # patches alive; the factory decides the transport, callers do not)
     ss.create_smb_session(None, "fs01")
     assert calls == ["plain"]
 

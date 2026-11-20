@@ -32,7 +32,8 @@ import threading
 import time
 from typing import Any, Optional
 
-from .smb_session import DEFAULT_MAX_ENTRIES, DEFAULT_MAX_READ_BYTES, SMBSession
+from .smb_session import (DEFAULT_MAX_ENTRIES, DEFAULT_MAX_READ_BYTES,
+                          ImpacketTransport)
 
 _SCHEMA_VERSION = 1
 
@@ -383,7 +384,7 @@ class InventoryCache:
         return f"{dc or ''}|{source or ''}|{filter_ext or ''}"
 
 
-class CachedSMBSession(SMBSession):
+class CachedSMBSession(ImpacketTransport):
     """SMBSession whose three data-retrieval methods consult the shared
     inventory cache first. Cache hits never touch ``self.conn`` — the socket
     is only opened on a miss. Permission/security methods stay live."""

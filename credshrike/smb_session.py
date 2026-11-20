@@ -26,6 +26,7 @@ from impacket.smb3structs import (FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY,
                                   FILE_EXECUTE)
 
 from .acl import parse_security_descriptor, SidResolver, decode_share_permissions, SDParseError
+from .transport import EnumerationTransport
 from .credentials import AuthType, Credential
 from .krbutil import extract_for_spn, load_ticket
 
@@ -422,6 +423,20 @@ def _b64(data: bytes) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# impacket transport (behind the EnumerationTransport interface)
+# --------------------------------------------------------------------------- #
+class ImpacketTransport(SMBSession, EnumerationTransport):
+    """Direct SMB over sockets — the default transport.
+
+    Zero overrides: SMBSession already satisfies the interface (the core
+    four methods natively, the security probes through the ABC's optional
+    defaults being shadowed by SMBSession's own implementations). It
+    exists so callers can hold an EnumerationTransport without caring
+    whether bytes come from impacket or (later) a Cobalt Strike beacon,
+    and so the read-only surface is declared in one place."""
+
+
+# --------------------------------------------------------------------------- #
 # session factory (inventory cache hook)
 # --------------------------------------------------------------------------- #
 # The shared inventory cache is armed process-wide for the duration of a run;
@@ -455,5 +470,5 @@ def create_smb_session(credential, host, port: int = 445, timeout: int = 30,
         from .inventory_cache import CachedSMBSession   # lazy: no import cycle
         return CachedSMBSession(credential, host, cache=cache,
                                 port=port, timeout=timeout, resolver=resolver)
-    return SMBSession(credential, host, port=port, timeout=timeout,
-                      resolver=resolver)
+    return ImpacketTransport(credential, host, port=port, timeout=timeout,
+                             resolver=resolver)

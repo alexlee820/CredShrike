@@ -129,7 +129,8 @@ class AgentSession:
 
     # -- SMB --------------------------------------------------------------- #
     def smb(self, host: str) -> SMBSession:
-        """Cached read-only SMB session per host."""
+        """Cached read-only enumeration transport for a host (impacket
+        today; the factory decides — see create_smb_session)."""
         if host not in self._smb_cache:
             session = create_smb_session(self.credential, host, timeout=30)
             session.connect()
