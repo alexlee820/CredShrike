@@ -197,8 +197,16 @@ def _walk_share_files(smb_session, share_name: str, depth: int,
                        conn_pool=None, walk_threads: int = 1,
                        on_file: Optional[Callable] = None) -> tuple[list[dict], int, list[dict]]:
     """Phase 1: walk directory tree using PARALLEL BFS. All directories at the
-    same level are listed concurrently. Each listing borrows its own
-    connection from the pool (SMB is not thread-safe).
+    same level are listed concurrently.
+
+    Two listing modes, same filtering semantics:
+    * impacket (default): each listing borrows a pooled connection (SMB is
+      not thread-safe)
+    * batch-capable transports (hasattr submit_list_dir — the Cobalt Strike
+      transport): every directory in the level is SUBMITTED at once and the
+      level drains together — the teamserver bundles the tasks into the
+      beacon's existing check-ins, so a 30s-sleep beacon sweeps a whole
+      level per check-in instead of one directory per check-in.
 
     ``on_file``: streaming hook — called with each discovered (filtered) file
     dict as soon as it is seen (must be thread-safe, e.g. queue.put). Used by
@@ -210,6 +218,31 @@ def _walk_share_files(smb_session, share_name: str, depth: int,
     skipped: list[dict] = []
     seen_dirs: set[str] = set()
     dirs_walked = 0
+    batched = hasattr(smb_session, "submit_list_dir")
+
+    def _ingest(res_path: str, listing: dict, level: int,
+                next_level: list[tuple[str, int]]) -> None:
+        """Filter one listing into files/skipped/next_level (shared by both
+        listing modes so their semantics can never drift apart)."""
+        echo(f"  ⋮ walk {res_path or '/'}")
+        for entry in listing.get("entries", [])[:1000]:
+            if len(files) >= max_files:
+                break
+            name = entry.get("name", "")
+            if name in (".", ".."):
+                continue
+            child = f"{res_path}/{name}" if res_path else name
+            if entry.get("is_dir") and level < depth:
+                next_level.append((child, level + 1))
+            elif not entry.get("is_dir"):
+                ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+                if ext in skip:
+                    skipped.append({"path": child, "size": entry.get("size", 0), "ext": ext})
+                else:
+                    entry_dict = {"path": child, "size": entry.get("size", 0)}
+                    files.append(entry_dict)
+                    if on_file is not None:
+                        on_file(entry_dict)
 
     def _list_one_dir(dir_path: str):
         """List one directory. Returns (path, listing_or_None, error_or_None)."""
@@ -223,46 +256,52 @@ def _walk_share_files(smb_session, share_name: str, depth: int,
             if conn_pool:
                 conn_pool.put(conn)
 
-    # BFS level by level: all dirs at the same level listed in parallel
+    # BFS level by level
     current_level: list[tuple[str, int]] = [("", 0)]
     while current_level and len(files) < max_files:
         next_level: list[tuple[str, int]] = []
-        use_pool = walk_threads > 1 and len(current_level) > 1 and conn_pool
 
-        if use_pool:
-            with ThreadPoolExecutor(max_workers=min(walk_threads, len(current_level))) as pool:
-                futures = {pool.submit(_list_one_dir, d): (d, lvl) for d, lvl in current_level}
-                results = {futures[f]: f.result() for f in as_completed(futures)}
-        else:
-            results = {(d, l): _list_one_dir(d) for d, l in current_level}
-
-        for (dir_path, level), (res_path, listing, err) in results.items():
-            if res_path in seen_dirs:
-                continue
-            seen_dirs.add(res_path)
-            dirs_walked += 1
-            if err:
-                echo(f"  ! walk_error: {res_path or '/'} — {err}")
-                continue
-            echo(f"  ⋮ walk {res_path or '/'}")
-            for entry in listing.get("entries", []):
-                if len(files) >= max_files:
-                    break
-                name = entry.get("name", "")
-                if name in (".", ".."):
+        if batched:
+            # submit the WHOLE level, then drain it together
+            tickets = {}
+            for d, lvl in current_level:
+                tickets[smb_session.submit_list_dir(share_name, d)] = (d, lvl)
+            results = {}
+            while tickets:
+                for eid, res in smb_session.drain():
+                    if eid in tickets:
+                        results[tickets.pop(eid)] = res
+                if tickets:
+                    time.sleep(getattr(smb_session, "poll_interval", 0.5)
+                               or 0.5)
+            for (dir_path, level), res in results.items():
+                if dir_path in seen_dirs:
                     continue
-                child = f"{res_path}/{name}" if res_path else name
-                if entry.get("is_dir") and level < depth:
-                    next_level.append((child, level + 1))
-                elif not entry.get("is_dir"):
-                    ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
-                    if ext in skip:
-                        skipped.append({"path": child, "size": entry.get("size", 0), "ext": ext})
-                    else:
-                        entry_dict = {"path": child, "size": entry.get("size", 0)}
-                        files.append(entry_dict)
-                        if on_file is not None:
-                            on_file(entry_dict)
+                seen_dirs.add(dir_path)
+                dirs_walked += 1
+                if isinstance(res, Exception):
+                    echo(f"  ! walk_error: {dir_path or '/'} — "
+                         f"{str(res)[:80]}")
+                    continue
+                _ingest(dir_path, res, level, next_level)
+        else:
+            use_pool = walk_threads > 1 and len(current_level) > 1 and conn_pool
+            if use_pool:
+                with ThreadPoolExecutor(max_workers=min(walk_threads, len(current_level))) as pool:
+                    futures = {pool.submit(_list_one_dir, d): (d, lvl) for d, lvl in current_level}
+                    results = {futures[f]: f.result() for f in as_completed(futures)}
+            else:
+                results = {(d, l): _list_one_dir(d) for d, l in current_level}
+
+            for (dir_path, level), (res_path, listing, err) in results.items():
+                if res_path in seen_dirs:
+                    continue
+                seen_dirs.add(res_path)
+                dirs_walked += 1
+                if err:
+                    echo(f"  ! walk_error: {res_path or '/'} — {err}")
+                    continue
+                _ingest(res_path, listing, level, next_level)
         current_level = next_level
 
     echo(f"  ⋮ walk done: {dirs_walked} dirs, {len(files)} to read, "
@@ -981,6 +1020,17 @@ def _sweep_one_host_stream(entry, host, credential, policy, dc, domain_source,
                         artifacts=all_artifacts, known_fps=all_known_fps)
 
 
+def _collection_label(policy, transport) -> str:
+    """How the data was collected (per-host report + domain index show it).
+    Per-host labels name the exact beacon; the sweep-level label (no
+    transport at hand) stays generic."""
+    if getattr(policy, "transport", "impacket") == "cs-mcp":
+        if transport is None:
+            return "Cobalt Strike (official CS MCP)"
+        return f"Cobalt Strike (beacon {getattr(transport, 'beacon', '?')})"
+    return "direct SMB (impacket)"
+
+
 def _finish_host_report(entry, host, session, audit, policy,
                         all_findings, all_reports, all_skipped,
                         masked_entities, total_dump_stats, echo,
@@ -1004,7 +1054,9 @@ def _finish_host_report(entry, host, session, audit, policy,
                  context={"principal": red["principal"],
                           "auth_type": red["auth_type"], "scope": [host],
                           "model": policy.model,
-                          "endpoint": policy.api_base_url or "api.anthropic.com"},
+                          "endpoint": policy.api_base_url or "api.anthropic.com",
+                          "collection": _collection_label(
+                              policy, session.smb(host))},
                  masking=masking,
                  findings=all_findings, scan_results=session.scan_results,
                  flagged=session.flagged_files,
@@ -1310,7 +1362,8 @@ def run_domain_sweep(*, credential: Credential, policy: Policy,
                "auth_type": credential.redacted()["auth_type"],
                "scope": [r["host"] for r in results],
                "model": policy.model,
-               "endpoint": policy.api_base_url or "api.anthropic.com"}
+               "endpoint": policy.api_base_url or "api.anthropic.com",
+               "collection": _collection_label(policy, None)}
     index_path = os.path.join(run_dir, "index.html")
     from ..report import write_domain_index
     write_domain_index(index_path, context=context, hosts=results,

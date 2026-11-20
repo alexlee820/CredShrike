@@ -87,6 +87,8 @@ def _load_policy(args) -> Policy:
         policy.cs_mcp_token = args.cs_mcp_token
     if getattr(args, "cs_beacon", None):
         policy.cs_beacon = args.cs_beacon
+    if getattr(args, "cs_sleep_boost", None):
+        policy.cs_sleep_boost = args.cs_sleep_boost
     if getattr(args, "no_cache", False):
         policy.inventory_cache = False
     if getattr(args, "cache_ttl_hours", None) is not None:
@@ -612,6 +614,11 @@ def register(subparsers) -> None:
     p.add_argument("--cs-beacon", default=None, metavar="ID",
                    help="cs-mcp: beacon id to enumerate through "
                         "(default: first available)")
+    p.add_argument("--cs-sleep-boost", default=None, metavar="BOOST:RESTORE",
+                   help="cs-mcp opt-in: submit 'sleep BOOST' on start and "
+                        "'sleep RESTORE' at the end, e.g. '5 50:60 50' — "
+                        "fast check-ins during collection, normal cadence "
+                        "afterwards (applies to every beacon in use)")
     p.add_argument("--no-cache", action="store_true",
                    help="disable the shared inventory cache (runs/.cache/inventory.db)")
     p.add_argument("--refresh", action="store_true",

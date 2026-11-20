@@ -244,3 +244,129 @@ def test_pick_beacon_explicit_then_auto():
     assert pick_beacon(backend, "7") == "7"
     assert pick_beacon(backend, "") == "1"
     assert pick_beacon(backend, "auto") == "1"
+
+
+# --------------------------------------------------------------------------- #
+# M3: beacon chooser, sleep boost, batched walking
+# --------------------------------------------------------------------------- #
+
+def test_beacon_chooser_affinity_and_round_robin():
+    from credshrike.cs_transport import BeaconChooser
+    beacons = [("1", "DEV01  10.0.0.5  user CORP\alice"),
+               ("2", "OPS01  10.0.1.9  user CORP\bob")]
+    c = BeaconChooser(beacons, "affinity")
+    assert c.pick("dev01.corp.local") == "1"     # hostname match wins
+    assert c.pick("ops01") == "2"
+    assert [c.pick("file01") for _ in range(3)] == ["1", "2", "1"]  # rr
+    assert BeaconChooser(beacons, "7").pick("any") == "7"           # explicit
+    assert BeaconChooser(beacons, "first").pick("x") == "1"
+    with pytest.raises(CSCommandError):
+        BeaconChooser([], "affinity").pick("x")
+
+
+def test_sleep_boost_applies_to_all_and_restores(monkeypatch):
+    import credshrike.cs_transport as cs
+    import credshrike.smb_session as ss
+    from credshrike.config import Policy
+
+    backend = FakeCSBackend(beacons="1 DEV01\n2 OPS01")
+    monkeypatch.setattr(cs, "RealCSBackend", lambda url, token: backend)
+    policy = Policy()
+    policy.transport = "cs-mcp"
+    policy.cs_mcp_url = "http://fake"
+    policy.cs_beacon = "affinity"
+    policy.cs_sleep_boost = "5 50:60 50"
+    cs.arm_cs_transport(policy)
+    try:
+        boost_cmds = [a["command"] for t, a in backend.commands
+                      if a.get("command", "").startswith("sleep ")]
+        assert boost_cmds == ["sleep 5 50", "sleep 5 50"]   # every beacon
+        t = ss.create_smb_session(None, "ops01")
+        assert isinstance(t, CobaltStrikeTransport) and t.beacon == "2"
+    finally:
+        ss.disarm_transport()
+    restore = [a["command"] for t, a in backend.commands
+               if a.get("command", "").startswith("sleep ")]
+    assert restore == ["sleep 5 50", "sleep 5 50",
+                       "sleep 60 50", "sleep 60 50"]
+
+
+def test_batched_walker_levels_and_undelivered():
+    from credshrike.agent.orchestrator import _walk_share_files
+    outputs = {f"ls {UNC_IT}": LS_IT,
+               f"ls {UNC_IT}\scripts": LS_SCRIPTS}
+    t, backend = _transport(outputs=outputs)
+    t.deadline_seconds = 0.05
+    seen = []
+    lines = []
+    files, dirs, skipped = _walk_share_files(
+        t, "IT", depth=3, max_files=50, echo=lines.append,
+        on_file=lambda f: seen.append(f["path"]))
+    assert sorted(seen) == ["creds.txt", "scripts/run.bat"]
+    assert dirs == 2 and not skipped
+
+
+def test_batched_walker_survives_undelivered_dir():
+    from credshrike.agent.orchestrator import _walk_share_files
+    # scripts dir never completes → walk_error, sibling file still collected
+    outputs = {f"ls {UNC_IT}": LS_IT}
+    t, _ = _transport(outputs=outputs)
+    t.deadline_seconds = 0.05
+    lines = []
+    files, dirs, _ = _walk_share_files(t, "IT", depth=3, max_files=50,
+                                       echo=lines.append)
+    assert [f["path"] for f in files] == ["creds.txt"]
+    assert any("walk_error" in l and "scripts" in l for l in lines)
+    assert any("creds.txt" == f["path"] for f in files)
+
+
+def test_domain_sweep_end_to_end_through_cs_transport(tmp_path, monkeypatch):
+    """The whole stack through the CS seam: armed provider → walker (batch
+    submit/drain) → reads (download links) → report labelled 'Cobalt
+    Strike'."""
+    import base64 as b64
+    import credshrike.smb_session as ss
+    from credshrike.agent.orchestrator import run_domain_sweep
+    from test_orchestrator import _client_factory_for_hosts, _computers, \
+        _credential
+
+    UNC_CRED = UNC_IT + chr(92) + "creds.txt"
+    outputs = {f"net view {chr(92) * 2}{HOST}": NETVIEW,
+               f"ls {UNC_IT}": LS_IT,
+               f"download {UNC_CRED}": "ok"}
+    backend = FakeCSBackend(
+        outputs=outputs,
+        downloads=["101 " + UNC_CRED + " complete"])
+    monkeypatch.setattr(CobaltStrikeTransport, "_http_get",
+                        staticmethod(lambda link: b"DB_PASSWORD=Winter!\n"))
+    ss.arm_transport(lambda host: CobaltStrikeTransport(
+        backend, beacon="1", host=host, deadline_seconds=30))
+    try:
+        from credshrike.config import Policy
+        policy = Policy()
+        policy.analysis_mode = "batch"       # dump path exercises the walker
+        policy.analysis_triage = False
+        policy.transport = "cs-mcp"
+        factory = _client_factory_for_hosts({"FILE01": []})
+        from credshrike.domain.base import ComputerRecord
+        result = run_domain_sweep(
+            credential=_credential(), policy=policy,
+            audit_dir=str(tmp_path), client_factory=factory,
+            echo=lambda l: None,
+            source_override=lambda: [ComputerRecord(cn="FILE01",
+                                                    dns_name=HOST)],
+            reachable_check=lambda host: True)
+        assert result["hosts"][0]["status"] == "done"
+        index = open(result["index_html"], encoding="utf-8").read()
+        assert "Cobalt Strike (official CS MCP)" in index
+        import os
+        per_host = open(os.path.join(result["run_dir"],
+                                     result["hosts"][0]["html"]),
+                        encoding="utf-8").read()
+        assert "Cobalt Strike (beacon 1)" in per_host
+        # only whitelisted commands ever reached the (fake) server
+        submitted = backend.submitted_commands()
+        assert all(c.startswith(("ls ", "net view", "download "))
+                   for c in submitted), submitted
+    finally:
+        ss.disarm_transport()

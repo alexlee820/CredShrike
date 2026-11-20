@@ -322,6 +322,11 @@ as a starting point.
 |-----|---------|-------------|
 | `stream` | true | SSE token streaming (auto-falls back if the endpoint rejects it) |
 | `prompt_cache` | true | `cache_control` on system+tools and the rolling last message; auto-disabled if unsupported |
+| `transport` | "impacket" | `cs-mcp` routes enumeration through a Cobalt Strike beacon (official CS MCP server; read-only ls/net view/download templates; requires cs_mcp_url) |
+| `cs_mcp_url` / `cs_mcp_token` | "" | official cobaltstrike-mcp-server endpoint + bearer token |
+| `cs_beacon` | "" | explicit beacon id, `first` (default), or `affinity` (hostname match, else round-robin) |
+| `cs_deadline_minutes` | 30 | per-execution deadline; a beacon that never checks in surfaces as CSUndelivered |
+| `cs_sleep_boost` | "" | opt-in `"<boost>:<restore>"` e.g. `5 50:60 50` — sleep commands at run arm/disarm, every beacon |
 | `socks_proxy` | "" | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos **only** — LLM API calls stay direct (unlike proxychains, which tunnels the whole process). `socks5://` (local DNS) / `socks5h://` (DNS at the proxy) / `socks4://` / `http://`, optional `user:pass@`. Patched modules: `impacket.nmb`, `impacket.ldap.ldap`, `impacket.krb5.kerberosv5`, the vendored ADWS client, the reachability probe |
 | `inventory_cache` | true | Shared inventory cache at `<audit_dir>/.cache/inventory.db` (git-ignored): computers/shares/listings/reads cached across runs; `false` = complete bypass |
 | `cache_ttl_hours` | 24 | Freshness window for listings + metadata-less reads; content rows also validate size + mtime against the parent listing |
@@ -437,6 +442,9 @@ as a starting point.
 | `--no-mask-restore` | Leave placeholders in the report |
 | `--mask-email-domain` | Surrogate email domain (default `corp.local`) |
 | `--mask-netbios-domain` | Surrogate NetBIOS domain (default `corp`) |
+| `--transport` | `impacket` (direct SMB) or `cs-mcp` (through a Cobalt Strike beacon via the official CS MCP server) |
+| `--cs-mcp-url` / `--cs-mcp-token` / `--cs-beacon` | cs-mcp endpoint / bearer token / beacon selection (id, first, affinity) |
+| `--cs-sleep-boost` | opt-in `BOOST:RESTORE` sleep commands at run start/end (every beacon) |
 | `--socks-proxy` | SOCKS/HTTP proxy for SMB/LDAP/ADWS/Kerberos only — LLM direct (`socks5h://` = DNS at the proxy); shared across smb/domain/agent subcommands |
 | `--resume RUN_DIR` | domain sweeps only: continue an interrupted run (done hosts/shares skipped, stream file verdicts carried over, budget restored). `--resume latest` picks the newest resumable run; `credshrike runs list` shows them all |
 | `--no-cache` / `--refresh` | disable the inventory cache / wipe it before the run |

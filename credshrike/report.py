@@ -358,6 +358,7 @@ def build_report_html(*, context: dict, findings: list[dict], scan_results: list
   <span>credential <b>{_esc(context.get('principal'))}</b> ({_esc(context.get('auth_type'))})</span>
   <span>model <b>{_esc(context.get('model'))}</b></span>
   <span>endpoint <b>{_esc(context.get('endpoint'))}</b></span>
+  <span>collected via <b>{_esc(context.get('collection') or 'direct SMB (impacket)')}</b></span>
   <span>generated <b>{ts}</b></span>
   <span>audit <b>{_esc(audit_path)}</b></span>
   <span>redactions applied <b>{redactions}</b></span>
@@ -656,6 +657,7 @@ def build_domain_index_html(*, context: dict, hosts: list, merged: dict,
   <span>credential <b>{_esc(context.get('principal'))}</b> ({_esc(context.get('auth_type'))})</span>
   <span>model <b>{_esc(context.get('model'))}</b></span>
   <span>endpoint <b>{_esc(context.get('endpoint'))}</b></span>
+  <span>collected via <b>{_esc(context.get('collection') or 'direct SMB (impacket)')}</b></span>
   <span>generated <b>{ts}</b></span>
   <span>computers in domain <b>{len(computers)}</b></span>
   <span>hosts swept <b>{done}/{len(hosts)}</b></span>
